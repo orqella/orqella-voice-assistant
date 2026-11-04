@@ -24,14 +24,14 @@ MAX_TEXT = 2_000
 DEFAULT_PORT = 8790
 
 
-class Voice AssistantHTTPServer(ThreadingHTTPServer):
+class VoiceAssistantHTTPServer(ThreadingHTTPServer):
     """Threaded localhost API with the Voice Assistant config attached."""
 
     daemon_threads = True
     allow_reuse_address = True
 
     def __init__(self, address: tuple[str, int], config: Config, token: str = ""):
-        super().__init__(address, Voice AssistantRequestHandler)
+        super().__init__(address, VoiceAssistantRequestHandler)
         self.config = config
         self.token = token
         self.transcriber: Transcriber | None = None
@@ -39,7 +39,7 @@ class Voice AssistantHTTPServer(ThreadingHTTPServer):
         self.resolver = JustWatchResolver(config)
 
 
-class Voice AssistantRequestHandler(BaseHTTPRequestHandler):
+class VoiceAssistantRequestHandler(BaseHTTPRequestHandler):
     server_version = "Voice AssistantAPI/0.1"
 
     def log_message(self, fmt: str, *args: Any) -> None:
@@ -207,7 +207,7 @@ class Voice AssistantRequestHandler(BaseHTTPRequestHandler):
 
 
 def _transcribe(
-    server: Voice AssistantHTTPServer,
+    server: VoiceAssistantHTTPServer,
     audio: bytes,
     *,
     sample_rate: int = 16000,
@@ -265,7 +265,7 @@ def serve(
             "api.token or JARVIS_API_TOKEN"
         )
 
-    server = Voice AssistantHTTPServer((bind, listen_port), config, token=token)
+    server = VoiceAssistantHTTPServer((bind, listen_port), config, token=token)
     print(f"jarvis api listening on http://{bind}:{listen_port}", flush=True)
     try:
         server.serve_forever()

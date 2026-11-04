@@ -12,6 +12,15 @@ First-party external Orqella module for local hold-to-talk commands.
   module's Settings tab if needed.
 - When the module is disabled, its sidecar is stopped and its resources are not
   used.
+- The module now owns the Home Assistant API process. When setup is complete it
+  starts `engine.cli serve` from `data/.venv` on the address configured in
+  `data/config.toml` (`api.host`, `api.port`, default `127.0.0.1:8790`).
+  Settings shows whether the API is managed by the module, an external process,
+  or stopped, with Start/Restart/Stop controls. The older standalone
+  `jarvis-api.service` is no longer required and should be disabled after the
+  module API is running.
+- Python 3.11+ is required by the sidecar because the engine uses `tomllib`.
+  Older interpreters now produce a clear setup error instead of a crash loop.
 
 ## Engine data
 

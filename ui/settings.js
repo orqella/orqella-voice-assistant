@@ -4,6 +4,7 @@
   let routes = { groups: [] };
   let dataRoot = "";
   let setup = { ready: false };
+  let voiceApi = { state: "stopped" };
   let pollTimer = null;
   let setupPoll = null;
   let deleteArmed = "";
@@ -21,10 +22,20 @@
   };
   const setSetup = (state) => {
     setup = state || {};
+    const pythonOk = state?.python_ok !== false;
     $("setupTitle").textContent = state?.ready ? "Voice engine ready" : "Voice engine setup";
-    $("setupStatus").textContent = state?.ready ? "ready" : state?.job === "running" ? "setting up…" : "not initialized";
-    $("setupButton").disabled = !!state?.ready || state?.job === "running";
-    $("setupButton").textContent = state?.ready ? "Ready" : state?.job === "running" ? "Setting up…" : "Set up voice engine";
+    $("setupStatus").textContent = !pythonOk
+      ? `Python ${state?.python || "3.11+"} is too old`
+      : state?.ready ? "ready" : state?.job === "running" ? "setting up…" : "not initialized";
+    $("setupButton").disabled = !pythonOk || !!state?.ready || state?.job === "running";
+    $("setupButton").textContent = !pythonOk
+      ? "Python 3.11+ required"
+      : state?.ready ? "Ready" : state?.job === "running" ? "Setting up…" : "Set up voice engine";
+    if (state?.error) {
+      $("setupLog").hidden = false;
+      $("setupLog").textContent = state.error;
+      return;
+    }
     if (state?.log) {
       $("setupLog").hidden = false;
       $("setupLog").textContent = state.log.slice(-5000);
@@ -32,11 +43,52 @@
     }
   };
 
+  const setApi = (state) => {
+    voiceApi = state || { state: "stopped" };
+    const kind = voiceApi.state === "running" ? "ok" : voiceApi.state === "external" ? "warn" : voiceApi.error ? "bad" : "";
+    $("apiStatus").textContent = voiceApi.state === "external" ? "external" : voiceApi.state === "running" ? "running" : voiceApi.ready ? "stopped" : "setup required";
+    $("apiStatus").className = `va-status ${kind}`;
+    $("apiDetail").textContent = `${voiceApi.host || "127.0.0.1"}:${voiceApi.port || 8790} · ${voiceApi.managed ? "managed by this module" : voiceApi.state === "external" ? "using an external process" : "not running"}${voiceApi.error ? ` · ${voiceApi.error}` : ""}`;
+    $("apiStart").disabled = !voiceApi.ready || voiceApi.state === "running" || voiceApi.state === "external";
+    $("apiStop").disabled = !voiceApi.managed || voiceApi.state !== "running";
+    $("apiRestart").disabled = !voiceApi.ready || voiceApi.state === "external";
+    if (voiceApi.error) {
+      $("apiLog").hidden = false;
+      $("apiLog").textContent = voiceApi.error;
+    }
+  };
+
+  async function loadApi() {
+    try {
+      setApi(await backend("/api/voice-api"));
+    } catch (error) {
+      $("apiStatus").textContent = "unavailable";
+      $("apiStatus").className = "va-status bad";
+      $("apiDetail").textContent = error.message || "Could not read API status.";
+    }
+  }
+
+  async function apiAction(action) {
+    $("apiStart").disabled = true;
+    $("apiStop").disabled = true;
+    $("apiRestart").disabled = true;
+    try {
+      setApi(await backend(`/api/voice-api/${action}`, "POST", {}));
+      if (voiceApi.error) {
+        $("apiLog").hidden = false;
+        $("apiLog").textContent = voiceApi.error;
+      }
+    } catch (error) {
+      setApi({ ...voiceApi, error: error.message || "Voice API action failed." });
+    }
+  }
+
   async function loadSetup() {
     try {
       const state = await backend("/api/status");
       dataRoot = state.data_root || dataRoot;
       setSetup(state);
+      await loadApi();
       if (state.job === "running") {
         clearTimeout(setupPoll);
         setupPoll = setTimeout(loadSetup, 2000);
