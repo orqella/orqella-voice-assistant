@@ -1,7 +1,7 @@
 # Orqella runtime data
 /data/
-/.venv/
-/node_modules/
-/target/
-/__pycache__/
-/sidecar.log
+.venv/
+node_modules/
+target/
+__pycache__/
+sidecar.log
