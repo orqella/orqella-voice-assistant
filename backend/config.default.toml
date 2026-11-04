@@ -1,0 +1,47 @@
+# Voice Assistant engine config. Edit this file (or ask Orqella's agent) to add
+# house modes, applications, Home Assistant entities, and other routes.
+
+[audio]
+source = ""
+rate = 16000
+max_seconds = 90
+beep = false
+
+[stt]
+model = "small.en"
+device = "cpu"
+compute_type = "int8"
+language = "en"
+download_root = "models"
+vad = true
+
+[input]
+wake_words = ["voice assistant", "assistant"]
+default_mode = "command"
+
+[ha]
+url = "http://127.0.0.1:8123"
+token_command = ["secret-tool", "lookup", "service", "hass", "origin", "http://localhost:8123"]
+state_entity = "sensor.voice_assistant_state"
+
+[llm]
+enabled = false
+base_url = "http://127.0.0.1:1234/v1"
+model = ""
+timeout = 25
+temperature = 0.1
+
+[api]
+host = "127.0.0.1"
+port = 8790
+token = ""
+
+[system]
+lock = ["omarchy", "system", "lock"]
+
+[apps]
+terminal = ["omarchy-launch-terminal"]
+files = ["ts"]
+browser = ["omarchy-launch-browser"]
+
+# Add house modes as [[mode]] tables with [mode.actions] entries.

@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Voice Assistant</title><link rel="stylesheet" href="overview.css"><link rel="stylesheet" href="/assets/theme.css"></head>
+<body><main class="voice-overview">
+  <button class="voice-talk compact" id="voiceButton" type="button" aria-pressed="false" aria-label="Hold to talk">
+    <span class="voice-orb" aria-hidden="true">🎙</span>
+    <span class="voice-label" id="voiceLabel">Hold to talk</span>
+  </button>
+  <p class="voice-status" id="voiceStatus">Connecting…</p>
+  <div class="voice-exchange" id="voiceExchange" hidden>
+    <p id="voiceTranscript"></p>
+    <p class="reply" id="voiceReply"></p>
+  </div>
+</main><script src="voice.js"></script></body></html>

@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Voice Assistant settings</title><link rel="stylesheet" href="settings.css"><link rel="stylesheet" href="/assets/theme.css"></head>
+<body><main class="va-settings">
+  <section class="va-setup" id="setup">
+    <div class="va-setup-head"><b id="setupTitle">Voice engine setup</b><span class="va-status" id="setupStatus">Checking…</span></div>
+    <div class="va-actions"><button id="setupButton" type="button">Set up voice engine</button></div>
+    <pre id="setupLog" hidden></pre>
+  </section>
+  <div class="va-head"><span class="va-status" id="status">Loading routes…</span><button class="ghost" id="refresh" type="button">Refresh</button></div>
+  <p class="va-note">Open Details to see a route's phrases and action. Config-defined routes can be deleted; engine routes can be disabled.</p>
+  <div class="va-routes" id="routes"></div>
+  <section class="va-agent">
+    <h2>Add routes</h2>
+    <textarea id="prompt" placeholder="Describe the voice routes to add or change…"></textarea>
+    <div class="va-actions"><button id="run" type="button">Ask agent</button><span id="agentStatus"></span></div>
+    <pre id="agentLog" hidden></pre>
+  </section>
+</main><script src="settings.js"></script></body></html>

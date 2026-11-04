@@ -1,0 +1,24 @@
+schema = 1
+id = "voice-assistant"
+name = "Voice Assistant"
+version = "0.1.0"
+api_version = "1"
+description = "Hold-to-talk voice commands with a managed route catalog."
+entry = "ui/index.html"
+overview = "ui/overview.html"
+settings = "ui/settings.html"
+overview_default = true
+page_default = false
+icon = "ui/icon.svg"
+node_scope = "node"
+permissions = ["backend", "agent", "media.record"]
+
+[ui]
+surface = "page"
+
+[backend]
+kind = "sidecar"
+command = ["python3", "backend/server.py"]
+health_path = "/health"
+ready_timeout_ms = 15000
+sandbox = false
