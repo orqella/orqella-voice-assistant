@@ -1,5 +1,5 @@
 # Orqella runtime data
-/data/
+data/
 .venv/
 node_modules/
 target/
