@@ -39,6 +39,7 @@ MAX_AUDIO = 30 * 1024 * 1024
 
 DATA.mkdir(parents=True, exist_ok=True)
 os.environ["VOICE_DATA_ROOT"] = str(DATA)
+os.environ.setdefault("XDG_STATE_HOME", str(DATA / "state"))
 os.environ["JARVIS_CONFIG"] = str(CONFIG_FILE)
 sys.path.insert(0, str(BACKEND))
 if not CONFIG_FILE.exists():

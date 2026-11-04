@@ -5,3 +5,4 @@ node_modules/
 target/
 __pycache__/
 sidecar.log
+.local/
