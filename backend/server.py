@@ -17,7 +17,10 @@ import sys
 import tempfile
 import threading
 import time
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.9/3.10: the preflight reports the requirement.
+    tomllib = None
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 from dataclasses import asdict
@@ -91,6 +94,8 @@ def setup_ready():
 
 
 def api_settings():
+    if tomllib is None:
+        return "127.0.0.1", 8790, ""
     try:
         data = tomllib.loads(CONFIG_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -204,12 +209,12 @@ def start_api():
         running = process is not None and process.poll() is None
     if running:
         return api_status()
+    cleanup_stale_api()
     if api_health(host, port, token):
         return api_status()
     if not setup_ready():
         API_LAST_ERROR = "Complete the Voice Assistant setup before starting the API."
         return api_status()
-    cleanup_stale_api()
     API_LOG.parent.mkdir(parents=True, exist_ok=True)
     log = API_LOG.open("w", encoding="utf-8")
     env = os.environ.copy()
