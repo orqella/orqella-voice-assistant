@@ -2,14 +2,13 @@
 
 First-party external Orqella module for local hold-to-talk commands.
 
-- The page and overview card share the trusted shell microphone bridge.
+- The overview card uses the trusted shell microphone bridge.
 - Settings contains the live route catalog, per-route/group toggles, expandable
   route details (phrases, action, source), the voice engine setup workflow, and
   an agent prompt for adding routes. Config-defined modes, applications, and
   Apple TV shows can be deleted from the Settings list; engine routes can be
   disabled but not deleted from `config.toml`.
-- The page tab is hidden by default (`page_default = false`); enable it from the
-  module's Settings tab if needed.
+- The module is overview-only; there is no standalone page tab.
 - When the module is disabled, its sidecar is stopped and its resources are not
   used.
 - The module now owns the Home Assistant API process. When setup is complete it
