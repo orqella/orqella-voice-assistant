@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import shlex
+import shutil
 import subprocess
+import sys
 from typing import Any
 
 from .ha import HA, HAError
@@ -57,6 +59,10 @@ class Executor:
             return
 
         if action.hypr:
+            if not sys.platform.startswith("linux") or not shutil.which("hyprctl"):
+                raise RuntimeError(
+                    "Hyprland actions are only available on a Linux Hyprland desktop"
+                )
             argv = ["hyprctl", "dispatch", *shlex.split(action.hypr)]
             if self.dry_run:
                 print(f"DRY hypr {argv}")

@@ -35,7 +35,7 @@ DATA = MODULE_ROOT / "data"
 CONFIG_FILE = DATA / "config.toml"
 DEFAULT_CONFIG = BACKEND / "config.default.toml"
 VENV = DATA / ".venv"
-VENV_PY = VENV / "bin" / "python"
+VENV_PY = VENV / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 MODEL_MARKER = DATA / "model.ready"
 STATE_FILE = DATA / "route_state.json"
 MAX_AUDIO = 30 * 1024 * 1024
@@ -306,6 +306,39 @@ def setup_status():
         }
 
 
+def _setup_command(command, *, timeout, env=None, cwd=None):
+    proc = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=env,
+        cwd=cwd,
+    )
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        if detail:
+            setup_log(detail[-4000:])
+        raise RuntimeError(
+            f"Command exited {proc.returncode}: {' '.join(str(part) for part in command)}"
+        )
+    return proc
+
+
+def _configure_windows_runtime():
+    if os.name != "nt":
+        return
+    site_packages = VENV / "Lib" / "site-packages"
+    site_packages.mkdir(parents=True, exist_ok=True)
+    (site_packages / "orqella_voice_runtime.pth").write_text(
+        "import os, sys; "
+        "[os.add_dll_directory(str(p)) for p in "
+        "{sys.prefix, os.path.dirname(sys.executable)} "
+        "if os.path.isdir(str(p))]\n",
+        encoding="utf-8",
+    )
+
+
 def run_setup():
     with SETUP_LOCK:
         if SETUP["status"] == "running":
@@ -320,19 +353,39 @@ def run_setup():
     try:
         setup_log("Preparing Python environment…")
         if not VENV_PY.is_file():
-            subprocess.run([sys.executable, "-m", "venv", str(VENV)], check=True, timeout=180)
+            _setup_command(
+                [sys.executable, "-m", "venv", str(VENV)],
+                timeout=180,
+                cwd=str(MODULE_ROOT),
+            )
         setup_log("Installing speech dependencies (this can take a few minutes)…")
-        subprocess.run(
-            [str(VENV / "bin" / "pip"), "install", "--disable-pip-version-check", "faster-whisper>=1.1.0", "av>=15,<16"],
-            check=True,
+        packages = [
+            "faster-whisper>=1.1.0",
+            "av>=14.2,<15",
+            "sounddevice>=0.5",
+            "psutil>=5.9",
+        ]
+        if os.name == "nt":
+            packages.append("msvc-runtime")
+        _setup_command(
+            [
+                str(VENV_PY),
+                "-m",
+                "pip",
+                "install",
+                "--disable-pip-version-check",
+                "--only-binary=av",
+                *packages,
+            ],
             timeout=1800,
+            cwd=str(MODULE_ROOT),
         )
+        _configure_windows_runtime()
         setup_log("Downloading the speech model…")
         env = os.environ.copy()
         env["JARVIS_CONFIG"] = str(CONFIG_FILE)
-        subprocess.run(
+        _setup_command(
             [str(VENV_PY), str(BACKEND / "download_model.py"), str(CONFIG_FILE)],
-            check=True,
             timeout=3600,
             env=env,
             cwd=str(MODULE_ROOT),

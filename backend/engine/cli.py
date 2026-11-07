@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -13,7 +13,7 @@ from pathlib import Path
 
 from . import config as config_module
 from .actions import Executor
-from .audio import AudioError, Recording
+from .audio import AudioError, Recording, VENV_PYTHON
 from .config import Config, STATE_DIR
 from .deeplinks import JustWatchResolver
 from .ha import HA, HAError
@@ -55,7 +55,7 @@ def build_ha(config: Config) -> HA:
 def type_text(text: str) -> None:
     if not text.strip():
         return
-    if shutil.which("wtype"):
+    if sys.platform.startswith("linux") and shutil.which("wtype"):
         try:
             subprocess.run(
                 ["wtype", "-"],
@@ -67,11 +67,58 @@ def type_text(text: str) -> None:
             return
         except Exception:  # noqa: BLE001 - fall back to the clipboard
             pass
-    if shutil.which("wl-copy"):
-        subprocess.run(["wl-copy"], input=text, text=True, check=False)
-        notify("Voice Assistant", "Copied to clipboard.")
-    else:
-        notify("Voice Assistant", "Could not type the transcript.")
+    try:
+        if sys.platform == "darwin" and shutil.which("pbcopy"):
+            subprocess.run(["pbcopy"], input=text, text=True, check=True, timeout=10)
+            subprocess.run(
+                [
+                    "osascript",
+                    "-e",
+                    'tell application "System Events" to keystroke "v" using command down',
+                ],
+                check=True,
+                timeout=10,
+            )
+            return
+        if os.name == "nt" and shutil.which("clip"):
+            subprocess.run(["clip"], input=text, text=True, check=True, timeout=10)
+            subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "Add-Type -AssemblyName System.Windows.Forms; "
+                    "[System.Windows.Forms.SendKeys]::SendWait('^v')",
+                ],
+                check=True,
+                timeout=10,
+            )
+            return
+        if sys.platform.startswith("linux"):
+            if shutil.which("wl-copy"):
+                subprocess.run(["wl-copy"], input=text, text=True, check=True, timeout=10)
+                notify("Voice Assistant", "Copied to clipboard.")
+                return
+            if shutil.which("xclip"):
+                subprocess.run(
+                    ["xclip", "-selection", "clipboard"],
+                    input=text,
+                    text=True,
+                    check=True,
+                    timeout=10,
+                )
+                if shutil.which("xdotool"):
+                    subprocess.run(
+                        ["xdotool", "key", "ctrl+v"],
+                        check=True,
+                        timeout=10,
+                    )
+                else:
+                    notify("Voice Assistant", "Copied to clipboard.")
+                return
+    except Exception:  # noqa: BLE001 - fall back to the notification
+        pass
+    notify("Voice Assistant", "Could not type the transcript.")
 
 
 def resolve_result(config: Config, result: Result, ha: HA | None = None) -> Result:
@@ -453,16 +500,23 @@ def cmd_serve(config: Config, args) -> int:
 def cmd_doctor(config: Config, args) -> int:
     checks: list[tuple[str, bool]] = []
 
-    for binary in (
-        "pw-record",
-        "wtype",
-        "wl-copy",
-        "notify-send",
-        "hyprctl",
-        "secret-tool",
-        "nvidia-smi",
-    ):
+    if os.name == "nt":
+        binaries = ("powershell", "clip")
+    elif sys.platform == "darwin":
+        binaries = ("osascript", "pbcopy", "afplay")
+    else:
+        binaries = (
+            "pw-record",
+            "wtype",
+            "wl-copy",
+            "notify-send",
+            "hyprctl",
+            "secret-tool",
+            "nvidia-smi",
+        )
+    for binary in binaries:
         checks.append((binary, shutil.which(binary) is not None))
+    checks.append(("managed venv", VENV_PYTHON.is_file()))
 
     checks.append((f"config ({config.path})", config.path.exists()))
 
@@ -473,9 +527,19 @@ def cmd_doctor(config: Config, args) -> int:
     except Exception as exc:  # noqa: BLE001
         checks.append((f"home assistant ({exc})", False))
 
-    checks.append(
-        ("faster-whisper", importlib.util.find_spec("faster_whisper") is not None)
-    )
+    if VENV_PYTHON.is_file():
+        probe = subprocess.run(
+            [
+                str(VENV_PYTHON),
+                "-c",
+                "import faster_whisper, av, sounddevice, psutil",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        checks.append(("voice engine dependencies", probe.returncode == 0))
+    else:
+        checks.append(("voice engine dependencies", False))
 
     model_root = Path(str(config.get("stt.download_root", "models")))
     if not model_root.is_absolute():
@@ -491,12 +555,13 @@ def cmd_doctor(config: Config, args) -> int:
         checks.append(("llm (disabled)", True))
 
     checks.append(("recording idle", not Recording(config).active()))
-    checks.append(
-        (
-            "hyprdeck config",
-            (Path.home() / ".config/hyprdeck/config.toml").exists(),
+    if sys.platform.startswith("linux"):
+        checks.append(
+            (
+                "hyprdeck config",
+                (Path.home() / ".config/hyprdeck/config.toml").exists(),
+            )
         )
-    )
     bridge = Path(
         str(
             config.get(
@@ -510,7 +575,7 @@ def cmd_doctor(config: Config, args) -> int:
     checks.append(("node", bool(node) and (not str(node).startswith("/") or Path(str(node)).is_file())))
 
     for label, ok in checks:
-        print(f"{'✓' if ok else '✗'} {label}")
+        print(f"{'OK' if ok else 'MISSING'} {label}")
     return 0 if all(ok for _, ok in checks) else 1
 
 

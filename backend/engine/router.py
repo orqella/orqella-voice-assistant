@@ -3,6 +3,7 @@ from __future__ import annotations
 import colorsys
 import os
 import re
+import shutil
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -283,6 +284,11 @@ class Router:
 
         match = re.search(r"(?:go to |switch to )?workspace (\d+)", normalized)
         if match:
+            if not sys.platform.startswith("linux") or not shutil.which("hyprctl"):
+                return Result(
+                    "say",
+                    "Workspace switching is only available on a Hyprland desktop.",
+                )
             number = match.group(1)
             return Result("do", f"Workspace {number}.", [Action(hypr=f"workspace {number}")])
 

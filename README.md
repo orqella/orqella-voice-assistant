@@ -1,14 +1,21 @@
 # Voice Assistant
 
-First-party external Orqella module for local hold-to-talk commands. The
-current engine targets Linux desktops with PipeWire (`pw-record`) and a
-Wayland/Hyprland desktop; the module is intentionally limited to Linux until
-equivalent capture and desktop adapters exist for macOS and Windows.
+First-party external Orqella module for local hold-to-talk commands. The module
+runs on Linux, macOS, and Windows:
 
-The default config is intentionally generic: wake words are
-"voice assistant"/"assistant", the Home Assistant token command is blank, and
-the app shortcuts are empty. Add only the commands and services that exist on
-your machine.
+- **Linux:** PipeWire `pw-record`, Wayland typing/clipboard where available,
+  `notify-send`, and Hyprland workspace actions when `hyprctl` is present.
+- **macOS:** `sounddevice` recording in the managed Python environment,
+  `pbcopy` + Accessibility paste, `osascript` notifications, and `afplay` for
+  TTS files.
+- **Windows:** `sounddevice` recording, `clip` + SendKeys paste, PowerShell
+  notifications, and `Media.SoundPlayer` for TTS files.
+
+Desktop-specific integrations degrade gracefully: Hyprland commands are only
+offered on Linux with `hyprctl`; app shortcuts and the Home Assistant token
+command are empty by default. The default config is intentionally generic:
+wake words are "voice assistant"/"assistant"; add only commands and services
+that exist on your machine.
 
 - The overview card uses the trusted shell microphone bridge.
 - Settings contains the live route catalog, per-route/group toggles, expandable
@@ -45,7 +52,11 @@ runtime dependency on an external voice project.
 
 The Settings tab can create the Python environment and download the configured
 Whisper model. The default config uses `small.en`; change `stt.model` in
-`data/config.toml` to use another model.
+`data/config.toml` to use another model. Setup installs `sounddevice` and
+`psutil`; on Windows it also installs the Microsoft VC++ runtime DLLs that
+CTranslate2 needs. On macOS, grant microphone access when prompted (the first
+CLI recording may show a permission dialog), and grant Accessibility to the
+app or terminal for dictation paste.
 
 The agent prompt edits `data/config.toml`; it should not modify vendored engine
 source.

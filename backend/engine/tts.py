@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
+import sys
 
 from .config import Config
 from .ha import HA
@@ -18,6 +21,31 @@ class Speaker:
         self.notify_service = str(config.get("tts.notify_service", "") or "")
         self.ha = ha
 
+    def _play_file(self, path: str) -> None:
+        if sys.platform == "darwin" and shutil.which("afplay"):
+            command = ["afplay", path]
+        elif os.name == "nt" and shutil.which("powershell"):
+            command = [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                "(New-Object Media.SoundPlayer '" + path.replace("'", "''") + "').PlaySync()",
+            ]
+        elif shutil.which("pw-play"):
+            command = ["pw-play", path]
+        elif shutil.which("paplay"):
+            command = ["paplay", path]
+        elif shutil.which("aplay"):
+            command = ["aplay", "-q", path]
+        else:
+            return
+        subprocess.run(
+            command,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
     def say(self, text: str) -> None:
         if not text:
             return
@@ -34,12 +62,7 @@ class Speaker:
                 else:
                     subprocess.run(argv + [text], check=True)
                 if self.output_file:
-                    subprocess.run(
-                        ["pw-play", self.output_file],
-                        check=False,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
+                    self._play_file(self.output_file)
                 return
             except Exception:  # noqa: BLE001 - fall through to HA
                 pass
