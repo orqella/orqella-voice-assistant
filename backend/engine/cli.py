@@ -98,7 +98,7 @@ def route_text(
     announce: bool = True,
 ) -> tuple[Result, HA]:
     """Route and execute text, returning the result and HA client."""
-    is_command, remainder = split_wake(text)
+    is_command, remainder = split_wake(text, config.get("input.wake_words", []))
     if not command and not is_command:
         return Result("type", text), build_ha(config)
 
@@ -131,7 +131,7 @@ def handle_text(
     command: bool = False,
     dry_run: bool = False,
 ) -> int:
-    is_command, _ = split_wake(text)
+    is_command, _ = split_wake(text, config.get("input.wake_words", []))
     if not command and not is_command:
         type_text(text)
         return 0
@@ -440,7 +440,7 @@ def cmd_status(config: Config, args) -> int:
     print(f"stt model: {config.get('stt.model', 'small.en')}")
     print(f"ha: {config.get('ha.url', 'http://127.0.0.1:8123')}")
     print(f"llm: {'enabled' if config.get('llm.enabled', False) else 'disabled'}")
-    print(f"wake words: {', '.join(config.get('input.wake_words', ['jarvis']))}")
+    print(f"wake words: {', '.join(config.get('input.wake_words', ['voice assistant']))}")
     return 0
 
 

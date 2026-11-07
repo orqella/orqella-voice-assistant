@@ -21,7 +21,8 @@ default_mode = "command"
 
 [ha]
 url = "http://127.0.0.1:8123"
-token_command = ["secret-tool", "lookup", "service", "hass", "origin", "http://localhost:8123"]
+# Leave empty to use HA_TOKEN or configure a token command for your password store.
+token_command = []
 state_entity = "sensor.voice_assistant_state"
 
 [llm]
@@ -37,11 +38,13 @@ port = 8790
 token = ""
 
 [system]
-lock = ["omarchy", "system", "lock"]
+# Leave empty to use the platform default (loginctl, pmset, or Windows lock).
+lock = []
 
 [apps]
-terminal = ["omarchy-launch-terminal"]
-files = ["ts"]
-browser = ["omarchy-launch-browser"]
+# Add commands for apps you want voice shortcuts to launch.
+terminal = []
+files = []
+browser = []
 
 # Add house modes as [[mode]] tables with [mode.actions] entries.

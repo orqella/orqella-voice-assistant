@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import colorsys
+import os
 import re
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -28,7 +30,7 @@ class Result:
     directory: str | None = None
 
 
-WAKE_WORDS = ("hey jarvis", "okay jarvis", "jarvis")
+DEFAULT_WAKE_WORDS = ("voice assistant", "assistant")
 
 # Named colors for the den lights and Nanoleaf. White-ish names use a color
 # temperature so they look like actual white instead of a saturated RGB mix.
@@ -89,10 +91,21 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def split_wake(text: str) -> tuple[bool, str]:
+def default_lock_command() -> list[str]:
+    if os.name == "nt":
+        return ["rundll32.exe", "user32.dll,LockWorkStation"]
+    if sys.platform == "darwin":
+        return ["pmset", "displaysleepnow"]
+    return ["loginctl", "lock-session"]
+
+
+def split_wake(text: str, wake_words: list[str] | tuple[str, ...] | None = None) -> tuple[bool, str]:
     """Return (is_command, remainder). A wake word makes it a command."""
     normalized = normalize(text)
-    for wake in WAKE_WORDS:
+    for wake in (wake_words or DEFAULT_WAKE_WORDS):
+        wake = normalize(str(wake))
+        if not wake:
+            continue
         if normalized == wake:
             return True, ""
         if normalized.startswith(wake + " "):
@@ -232,7 +245,7 @@ class Router:
             return Result(
                 "do",
                 "Locking the desktop.",
-                [Action(shell=list(self.config.get("system.lock", ["omarchy", "system", "lock"])))],
+                [Action(shell=list(self.config.get("system.lock", []) or default_lock_command()))],
             )
 
         if normalized in {

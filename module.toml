@@ -1,7 +1,7 @@
 schema = 1
 id = "voice-assistant"
 name = "Voice Assistant"
-version = "0.1.1"
+version = "0.1.2"
 api_version = "1"
 description = "Hold-to-talk voice commands with a managed route catalog."
 overview = "ui/overview.html"
@@ -16,4 +16,6 @@ kind = "sidecar"
 command = ["python3", "backend/server.py"]
 health_path = "/health"
 ready_timeout_ms = 15000
+platforms = ["linux"]
+python = ">=3.11"
 sandbox = false

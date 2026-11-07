@@ -1,6 +1,14 @@
 # Voice Assistant
 
-First-party external Orqella module for local hold-to-talk commands.
+First-party external Orqella module for local hold-to-talk commands. The
+current engine targets Linux desktops with PipeWire (`pw-record`) and a
+Wayland/Hyprland desktop; the module is intentionally limited to Linux until
+equivalent capture and desktop adapters exist for macOS and Windows.
+
+The default config is intentionally generic: wake words are
+"voice assistant"/"assistant", the Home Assistant token command is blank, and
+the app shortcuts are empty. Add only the commands and services that exist on
+your machine.
 
 - The overview card uses the trusted shell microphone bridge.
 - Settings contains the live route catalog, per-route/group toggles, expandable
