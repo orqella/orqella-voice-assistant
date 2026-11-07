@@ -60,9 +60,13 @@ class Executor:
 
         if action.hypr:
             if not sys.platform.startswith("linux") or not shutil.which("hyprctl"):
-                raise RuntimeError(
-                    "Hyprland actions are only available on a Linux Hyprland desktop"
+                # Desktop-specific config can be shared across machines; an
+                # unavailable compositor is a no-op, not a crash.
+                print(
+                    "Hyprland actions are only available on a Linux Hyprland desktop",
+                    file=sys.stderr,
                 )
+                return
             argv = ["hyprctl", "dispatch", *shlex.split(action.hypr)]
             if self.dry_run:
                 print(f"DRY hypr {argv}")
