@@ -48,3 +48,14 @@ files = []
 browser = []
 
 # Add house modes as [[mode]] tables with [mode.actions] entries.
+
+
+[opencode]
+# Optional MCP bridge for "opencode ..." voice routes. Leave blank to disable.
+bridge = ""
+node = ""
+default_dir = "~"
+start_timeout = 40
+status_timeout = 20
+# Let the agent edit/run without permission prompts. Keep false unless trusted.
+auto_approve = false

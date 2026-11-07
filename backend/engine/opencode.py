@@ -36,13 +36,15 @@ def _node(config: Config) -> str:
 
 
 def _bridge(config: Config) -> Path:
-    raw = str(
-        config.get(
-            "opencode.bridge",
-            "~/.local/share/opencode-lmstudio-bridge/server.mjs",
-        )
-        or ""
-    )
+    raw = str(config.get("opencode.bridge", "") or "").strip()
+    if not raw:
+        legacy = Path.home() / ".local/share/opencode-lmstudio-bridge/server.mjs"
+        if legacy.is_file():
+            raw = str(legacy)
+        else:
+            raise OpenCodeError(
+                "OpenCode routes need an MCP bridge; set opencode.bridge in config.toml"
+            )
     path = Path(raw).expanduser()
     if not path.is_file():
         raise OpenCodeError(f"OpenCode MCP bridge not found: {path}")
@@ -50,7 +52,7 @@ def _bridge(config: Config) -> Path:
 
 
 def _default_dir(config: Config) -> str:
-    raw = str(config.get("opencode.default_dir", "~/Work") or "~/Work")
+    raw = str(config.get("opencode.default_dir", "~") or "~")
     return str(Path(raw).expanduser())
 
 
@@ -106,7 +108,7 @@ def _call_tool(
             "params": {
                 "protocolVersion": "2025-06-18",
                 "capabilities": {},
-                "clientInfo": {"name": "jarvis", "version": "0.1"},
+                "clientInfo": {"name": "voice-assistant", "version": "0.1"},
             },
         },
         {"jsonrpc": "2.0", "method": "notifications/initialized"},
@@ -197,7 +199,7 @@ def start(
     else:
         target_dir = _default_dir(config)
     if auto_approve is None:
-        auto_approve = bool(config.get("opencode.auto_approve", True))
+        auto_approve = bool(config.get("opencode.auto_approve", False))
     _log(f"[start] directory={target_dir}\nprompt: {prompt}")
     report = _call_tool(
         config,
