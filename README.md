@@ -60,3 +60,11 @@ app or terminal for dictation paste.
 
 The agent prompt edits `data/config.toml`; it should not modify vendored engine
 source.
+
+## Security
+
+The sidecar is intentionally unsandboxed (`sandbox = false`) because it needs
+the desktop session, audio devices, keyring, and local model files. It records
+only after the `media.record` permission is granted in the shell, and saved
+configuration is stored under the module data directory. Treat it as a trusted
+local application.
