@@ -59,3 +59,6 @@ start_timeout = 40
 status_timeout = 20
 # Let the agent edit/run without permission prompts. Keep false unless trusted.
 auto_approve = false
+# Store full prompts in data/state/opencode.log. Off by default: prompts may
+# contain private text.
+log_prompts = false

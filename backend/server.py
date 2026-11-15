@@ -6,10 +6,12 @@ the module's data directory so module code updates do not overwrite them.
 """
 import atexit
 import base64
+import copy
 import hmac
 import json
 import os
 import platform
+import queue
 import re
 import secrets
 import shutil
@@ -31,7 +33,7 @@ from pathlib import Path
 
 TOKEN = os.environ.get("ORQELLA_MODULE_TOKEN", "")
 CONFIG = json.loads(os.environ.get("ORQELLA_MODULE_CONFIG") or "{}")
-MODULE_ROOT = Path.cwd()
+MODULE_ROOT = Path(__file__).resolve().parent.parent
 BACKEND = Path(__file__).resolve().parent
 DATA = MODULE_ROOT / "data"
 CONFIG_FILE = DATA / "config.toml"
@@ -51,14 +53,21 @@ SHARED_TOKEN_FILE = (
 )
 MAX_AUDIO = 30 * 1024 * 1024
 
-DATA.mkdir(parents=True, exist_ok=True)
+DATA.mkdir(parents=True, exist_ok=True, mode=0o700)
+try:
+    DATA.chmod(0o700)
+except OSError:
+    pass
 os.environ["VOICE_DATA_ROOT"] = str(DATA)
 os.environ.setdefault("XDG_STATE_HOME", str(DATA / "state"))
 os.environ["JARVIS_CONFIG"] = str(CONFIG_FILE)
 sys.path.insert(0, str(BACKEND))
 if not CONFIG_FILE.exists():
     CONFIG_FILE.write_text(DEFAULT_CONFIG.read_text(encoding="utf-8"), encoding="utf-8")
-
+try:
+    CONFIG_FILE.chmod(0o600)
+except OSError:
+    pass
 PYTHON_SUPPORTED = sys.version_info[:2] >= (3, 11)
 PYTHON_REQUIRED = "Python 3.11 or newer"
 
@@ -86,12 +95,16 @@ def catalog_module():
 
 SETUP_LOCK = threading.Lock()
 CONFIG_LOCK = threading.Lock()
+TOKEN_LOCK = threading.Lock()
 SETUP = {"status": "idle", "log": ""}
 API_LOCK = threading.Lock()
 API_PROCESS = None
 API_LAST_ERROR = ""
 API_LOG = DATA / "voice-api.log"
 API_MARKER = DATA / "voice-api.pid"
+TRANSCRIBE_LOCK = threading.RLock()
+TRANSCRIBE_PROCESS = None
+TRANSCRIBE_LOG = DATA / "transcribe.log"
 TABLE_HEADER = re.compile(r"^\s*\[\[?[A-Za-z0-9_.-]+\]\]?\s*(?:#.*)?$")
 
 
@@ -104,16 +117,8 @@ def setup_ready():
     return PYTHON_SUPPORTED and VENV_PY.is_file() and MODEL_MARKER.is_file()
 
 
-def engine_token():
-    """Return the shared engine token, creating it once with 0600 mode."""
-    try:
-        value = SHARED_TOKEN_FILE.read_text(encoding="utf-8").strip()
-        if value:
-            return value
-    except OSError:
-        pass
-    value = secrets.token_urlsafe(32)
-    SHARED_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+def _write_shared_token(value: str) -> None:
+    SHARED_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, temporary = tempfile.mkstemp(prefix=".voice-token-", dir=SHARED_TOKEN_FILE.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -125,18 +130,47 @@ def engine_token():
             os.unlink(temporary)
         except OSError:
             pass
-    return value
+
+
+def sync_engine_token(value: str) -> None:
+    value = str(value or "").strip()
+    if not value:
+        return
+    with TOKEN_LOCK:
+        try:
+            current = SHARED_TOKEN_FILE.read_text(encoding="utf-8").strip()
+        except OSError:
+            current = ""
+        if current != value:
+            _write_shared_token(value)
+
+
+def engine_token():
+    """Return the shared engine token, creating it once with 0600 mode."""
+    with TOKEN_LOCK:
+        try:
+            value = SHARED_TOKEN_FILE.read_text(encoding="utf-8").strip()
+            if value:
+                return value
+        except OSError:
+            pass
+        value = secrets.token_urlsafe(32)
+        _write_shared_token(value)
+        return value
 
 
 def api_settings():
     if tomllib is None:
-        return "127.0.0.1", 8790, engine_token()
+        token = engine_token()
+        return "127.0.0.1", 8790, token
     try:
         data = tomllib.loads(CONFIG_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         data = {}
     api = data.get("api") if isinstance(data.get("api"), dict) else {}
     token = str(api.get("token") or "").strip() or engine_token()
+    if token:
+        sync_engine_token(token)
     return (
         str(api.get("host") or "127.0.0.1"),
         int(api.get("port") or 8790),
@@ -146,6 +180,8 @@ def api_settings():
 
 def api_health(host, port, token):
     health_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+    if ":" in health_host and not health_host.startswith("["):
+        health_host = f"[{health_host}]"
     request = Request(f"http://{health_host}:{port}/health")
     if token:
         request.add_header("Authorization", f"Bearer {token}")
@@ -237,6 +273,15 @@ def cleanup_stale_api():
     API_MARKER.unlink(missing_ok=True)
 
 
+def sanitized_env(keep=()):
+    env = os.environ.copy()
+    for key in ("ORQELLA_MODULE_TOKEN", "ORQELLA_MODULE_CONFIG"):
+        env.pop(key, None)
+    for key in keep:
+        env.pop(key, None)
+    return env
+
+
 def start_api():
     global API_PROCESS, API_LAST_ERROR
     host, port, token = api_settings()
@@ -253,7 +298,7 @@ def start_api():
         return api_status()
     API_LOG.parent.mkdir(parents=True, exist_ok=True)
     log = API_LOG.open("w", encoding="utf-8")
-    env = os.environ.copy()
+    env = sanitized_env()
     env["JARVIS_CONFIG"] = str(CONFIG_FILE)
     env["JARVIS_API_TOKEN"] = token
     env["VOICE_DATA_ROOT"] = str(DATA)
@@ -275,9 +320,15 @@ def start_api():
         log.close()
         API_LAST_ERROR = str(error)
         return api_status()
+    finally:
+        log.close()
     with API_LOCK:
         API_PROCESS = process
     API_MARKER.write_text(str(process.pid) + "\n", encoding="utf-8")
+    try:
+        API_MARKER.chmod(0o600)
+    except OSError:
+        pass
     API_LAST_ERROR = ""
     deadline = time.time() + 8
     while time.time() < deadline:
@@ -349,7 +400,7 @@ def _setup_command(command, *, timeout, env=None, cwd=None):
         capture_output=True,
         text=True,
         timeout=timeout,
-        env=env,
+        env=env if env is not None else sanitized_env(),
         cwd=cwd,
     )
     if proc.returncode != 0:
@@ -397,10 +448,10 @@ def run_setup():
             )
         setup_log("Installing speech dependencies (this can take a few minutes)…")
         packages = [
-            "faster-whisper>=1.1.0",
+            "faster-whisper>=1.1.0,<2",
             "av>=14.2,<15",
-            "sounddevice>=0.5",
-            "psutil>=5.9",
+            "sounddevice>=0.5,<1",
+            "psutil>=5.9,<8",
         ]
         if os.name == "nt":
             packages.append("msvc-runtime")
@@ -419,7 +470,7 @@ def run_setup():
         )
         _configure_windows_runtime()
         setup_log("Downloading the speech model…")
-        env = os.environ.copy()
+        env = sanitized_env()
         env["JARVIS_CONFIG"] = str(CONFIG_FILE)
         _setup_command(
             [str(VENV_PY), str(BACKEND / "download_model.py"), str(CONFIG_FILE)],
@@ -485,6 +536,10 @@ def _is_table_header(line):
     return bool(TABLE_HEADER.match(line.rstrip("\r\n")))
 
 
+def _is_nested_mode_table(line):
+    return bool(re.match(r"^\s*\[\s*mode\.[A-Za-z0-9_.-]+\s*\]\s*(?:#.*)?$", line.rstrip("\r\n")))
+
+
 def _remove_table(text, header):
     lines = text.splitlines(keepends=True)
     pattern = re.compile(r"^\s*\[\s*" + re.escape(header) + r"\s*\]\s*(?:#.*)?$")
@@ -506,7 +561,9 @@ def _remove_mode(text, name):
             start += 1
             continue
         end = start + 1
-        while end < len(lines) and not _is_table_header(lines[end]):
+        while end < len(lines) and (
+            not _is_table_header(lines[end]) or _is_nested_mode_table(lines[end])
+        ):
             end += 1
         block = "".join(lines[start:end])
         match = re.search(r"(?m)^\s*name\s*=\s*(\"(?:[^\"\\]|\\.)*\"|'[^']*')", block)
@@ -547,7 +604,7 @@ def _write_config(text):
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
             handle.write(text)
-        os.chmod(temporary, CONFIG_FILE.stat().st_mode)
+        os.chmod(temporary, 0o600)
         os.replace(temporary, CONFIG_FILE)
     finally:
         Path(temporary).unlink(missing_ok=True)
@@ -573,7 +630,7 @@ def delete_config_route(target):
 
 
 def catalog(force=False):
-    data = catalog_module().voice_capabilities(force)
+    data = copy.deepcopy(catalog_module().voice_capabilities(force))
     disabled = load_disabled()
     for group in data.get("groups", []):
         group["label"] = display_text(group.get("label"))
@@ -617,23 +674,85 @@ def match_route(transcript):
     }
 
 
+def _stop_transcriber() -> None:
+    global TRANSCRIBE_PROCESS
+    with TRANSCRIBE_LOCK:
+        process = TRANSCRIBE_PROCESS
+        TRANSCRIBE_PROCESS = None
+    if process is None:
+        return
+    try:
+        if process.stdin is not None:
+            process.stdin.close()
+        process.terminate()
+        process.wait(timeout=3)
+    except Exception:  # noqa: BLE001
+        try:
+            process.kill()
+        except OSError:
+            pass
+
+
+def _start_transcriber():
+    global TRANSCRIBE_PROCESS
+    env = sanitized_env()
+    env["JARVIS_CONFIG"] = str(CONFIG_FILE)
+    env["PYTHONPATH"] = str(BACKEND)
+    env["PYTHONUNBUFFERED"] = "1"
+    TRANSCRIBE_LOG.parent.mkdir(parents=True, exist_ok=True)
+    log = TRANSCRIBE_LOG.open("a", encoding="utf-8")
+    try:
+        process = subprocess.Popen(
+            [str(VENV_PY), str(BACKEND / "transcribe_worker.py")],
+            cwd=str(BACKEND),
+            env=env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=log,
+            bufsize=0,
+        )
+    finally:
+        log.close()
+    TRANSCRIBE_PROCESS = process
+    return process
+
+
 def transcribe(path):
     if not setup_ready():
         raise RuntimeError("voice engine setup is not complete")
-    env = os.environ.copy()
-    env["JARVIS_CONFIG"] = str(CONFIG_FILE)
-    result = subprocess.run(
-        [str(VENV_PY), str(BACKEND / "transcribe.py"), str(path)],
-        capture_output=True,
-        text=True,
-        timeout=180,
-        env=env,
-        cwd=str(MODULE_ROOT),
-    )
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout).strip()
-        raise RuntimeError(detail[-1200:] or "transcription failed")
-    return (result.stdout or "").strip()
+    with TRANSCRIBE_LOCK:
+        process = TRANSCRIBE_PROCESS
+        if process is None or process.poll() is not None:
+            process = _start_transcriber()
+        assert process.stdin is not None and process.stdout is not None
+        process.stdin.write((json.dumps({"path": str(path)}) + "\n").encode("utf-8"))
+        process.stdin.flush()
+        deadline = time.time() + 180
+        lines: queue.Queue[bytes] = queue.Queue()
+
+        def read_lines() -> None:
+            try:
+                for line in process.stdout:
+                    lines.put(line)
+            except (OSError, ValueError):
+                pass
+
+        threading.Thread(target=read_lines, daemon=True).start()
+        while time.time() < deadline:
+            remaining = max(0.0, deadline - time.time())
+            try:
+                line = lines.get(timeout=remaining)
+            except queue.Empty:
+                break
+            try:
+                payload = json.loads(line.decode("utf-8", "replace"))
+            except json.JSONDecodeError as error:
+                raise RuntimeError("transcription worker returned invalid JSON") from error
+            if payload.get("ok"):
+                return str(payload.get("text") or "").strip()
+            raise RuntimeError(str(payload.get("error") or "transcription failed"))
+        _stop_transcriber()
+        raise RuntimeError("transcription timed out")
 
 
 def execute(text):
@@ -781,8 +900,18 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    # Establish/synchronize the shared engine token even before the API or the
+    # Home Assistant integration asks for it.
+    api_settings()
+    atexit.register(_stop_transcriber)
     cleanup_stale_api()
     if setup_ready():
         start_api()
     port = int(os.environ["ORQELLA_MODULE_PORT"])
-    ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
+    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    server.daemon_threads = True
+    try:
+        server.serve_forever()
+    finally:
+        stop_api()
+        _stop_transcriber()

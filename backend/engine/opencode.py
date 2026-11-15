@@ -2,30 +2,42 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
-import select
 import shutil
 import subprocess
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
 
 from .config import Config, STATE_DIR
 
+HOST_HOME = Path(os.environ.get("ORQELLA_HOST_HOME") or Path.home()).expanduser()
+
 
 class OpenCodeError(RuntimeError):
     pass
 
 
+def host_path(value) -> Path:
+    raw = str(value or "").strip()
+    if raw == "~":
+        return HOST_HOME
+    if raw.startswith("~/"):
+        return HOST_HOME / raw[2:]
+    return Path(raw).expanduser()
+
+
 def _node(config: Config) -> str:
     configured = str(config.get("opencode.node", "") or "").strip()
     if configured:
-        return str(Path(configured).expanduser())
+        return str(host_path(configured))
     found = shutil.which("node")
     if found:
         return found
     candidates = [
-        Path.home() / ".local/share/mise/installs/node/latest/bin/node",
+        HOST_HOME / ".local/share/mise/installs/node/latest/bin/node",
         Path("/usr/local/bin/node"),
         Path("/usr/bin/node"),
     ]
@@ -38,14 +50,14 @@ def _node(config: Config) -> str:
 def _bridge(config: Config) -> Path:
     raw = str(config.get("opencode.bridge", "") or "").strip()
     if not raw:
-        legacy = Path.home() / ".local/share/opencode-lmstudio-bridge/server.mjs"
+        legacy = HOST_HOME / ".local/share/opencode-lmstudio-bridge/server.mjs"
         if legacy.is_file():
             raw = str(legacy)
         else:
             raise OpenCodeError(
                 "OpenCode routes need an MCP bridge; set opencode.bridge in config.toml"
             )
-    path = Path(raw).expanduser()
+    path = host_path(raw)
     if not path.is_file():
         raise OpenCodeError(f"OpenCode MCP bridge not found: {path}")
     return path
@@ -53,7 +65,36 @@ def _bridge(config: Config) -> Path:
 
 def _default_dir(config: Config) -> str:
     raw = str(config.get("opencode.default_dir", "~") or "~")
-    return str(Path(raw).expanduser())
+    return str(host_path(raw))
+
+
+def _resolve_directory(config: Config, directory: str | None) -> str:
+    if not directory:
+        return _default_dir(config)
+    target = host_path(directory)
+    if not target.is_absolute():
+        target = Path(_default_dir(config)) / target
+    resolved = target.resolve()
+    allowed = {HOST_HOME.resolve(), Path(_default_dir(config)).resolve()}
+    if not any(resolved.is_relative_to(root) for root in allowed):
+        raise OpenCodeError(
+            "OpenCode directory must be inside the host home or opencode.default_dir"
+        )
+    return str(resolved)
+
+
+def child_env() -> dict[str, str]:
+    env = os.environ.copy()
+    for key in (
+        "ORQELLA_MODULE_TOKEN",
+        "ORQELLA_MODULE_CONFIG",
+        "JARVIS_API_TOKEN",
+        "HA_TOKEN",
+        "VOICE_ASSISTANT_TOKEN",
+    ):
+        env.pop(key, None)
+    env["HOME"] = str(HOST_HOME)
+    return env
 
 
 def _log(text: str) -> None:
@@ -80,7 +121,7 @@ def _call_tool(
     if timeout is None:
         timeout = start_timeout if tool == "opencode_start" else 20.0
 
-    env = os.environ.copy()
+    env = child_env()
     env["OPENCODE_DEFAULT_DIR"] = directory or _default_dir(config)
     model = str(config.get("opencode.model", "") or "").strip()
     if model:
@@ -92,8 +133,7 @@ def _call_tool(
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            text=True,
-            bufsize=1,
+            bufsize=0,
             env=env,
         )
     except Exception as exc:  # noqa: BLE001
@@ -121,27 +161,32 @@ def _call_tool(
     ]
     try:
         for payload in payloads:
-            proc.stdin.write(json.dumps(payload) + "\n")
+            proc.stdin.write((json.dumps(payload) + "\n").encode("utf-8"))
         proc.stdin.flush()
 
         deadline = time.time() + timeout
         raw_result = None
+        lines: queue.Queue[bytes] = queue.Queue()
+
+        def read_lines() -> None:
+            try:
+                for line in proc.stdout:
+                    lines.put(line)
+            except (OSError, ValueError):
+                pass
+
+        threading.Thread(target=read_lines, daemon=True).start()
         while time.time() < deadline:
             remaining = max(0.0, deadline - time.time())
             try:
-                ready, _, _ = select.select([proc.stdout], [], [], remaining)
-            except (OSError, ValueError):
-                break
-            if not ready:
-                break
-            line = proc.stdout.readline()
-            if not line:
+                line = lines.get(timeout=remaining)
+            except queue.Empty:
                 break
             line = line.strip()
             if not line:
                 continue
             try:
-                message = json.loads(line)
+                message = json.loads(line.decode("utf-8", "replace"))
             except json.JSONDecodeError:
                 continue
             if message.get("id") == 2:
@@ -177,7 +222,10 @@ def _call_tool(
         raise OpenCodeError(text or f"OpenCode tool `{tool}` failed")
     if not text:
         raise OpenCodeError(f"OpenCode tool `{tool}` returned no text")
-    _log(f"[{tool}] {text}")
+    if tool == "opencode_start" and not bool(config.get("opencode.log_prompts", False)):
+        _log(f"[{tool}] result received (redacted)")
+    else:
+        _log(f"[{tool}] {text}")
     return text
 
 
@@ -191,16 +239,13 @@ def start(
     prompt = (prompt or "").strip()
     if not prompt:
         raise OpenCodeError("nothing to send to OpenCode")
-    if directory:
-        target = Path(directory).expanduser()
-        if not target.is_absolute():
-            target = Path(_default_dir(config)) / target
-        target_dir = str(target)
-    else:
-        target_dir = _default_dir(config)
+    target_dir = _resolve_directory(config, directory)
     if auto_approve is None:
         auto_approve = bool(config.get("opencode.auto_approve", False))
-    _log(f"[start] directory={target_dir}\nprompt: {prompt}")
+    if bool(config.get("opencode.log_prompts", False)):
+        _log(f"[start] directory={target_dir}\nprompt: {prompt}")
+    else:
+        _log(f"[start] directory={target_dir} (prompt redacted)")
     report = _call_tool(
         config,
         "opencode_start",

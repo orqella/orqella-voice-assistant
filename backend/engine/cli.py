@@ -556,20 +556,21 @@ def cmd_doctor(config: Config, args) -> int:
 
     checks.append(("recording idle", not Recording(config).active()))
     if sys.platform.startswith("linux"):
+        host_home = Path(os.environ.get("ORQELLA_HOST_HOME") or Path.home())
         checks.append(
             (
                 "hyprdeck config",
-                (Path.home() / ".config/hyprdeck/config.toml").exists(),
+                (host_home / ".config/hyprdeck/config.toml").exists(),
             )
         )
-    bridge = Path(
+    bridge = opencode.host_path(
         str(
             config.get(
                 "opencode.bridge",
                 "~/.local/share/opencode-lmstudio-bridge/server.mjs",
             )
         )
-    ).expanduser()
+    )
     checks.append((f"opencode bridge ({bridge})", bridge.is_file()))
     node = config.get("opencode.node") or shutil.which("node")
     checks.append(("node", bool(node) and (not str(node).startswith("/") or Path(str(node)).is_file())))

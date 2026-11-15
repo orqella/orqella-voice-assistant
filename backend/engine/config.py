@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import Any
 
 PROJECT = Path(__file__).resolve().parent.parent
-DEFAULT_CONFIG = PROJECT / "config.toml"
-STATE_HOME = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
+DEFAULT_CONFIG = PROJECT / "config.default.toml"
+HOST_HOME = Path(os.environ.get("ORQELLA_HOST_HOME") or Path.home()).expanduser()
+STATE_HOME = Path(os.environ.get("XDG_STATE_HOME", HOST_HOME / ".local" / "state"))
 STATE_DIR = STATE_HOME / "jarvis"
 
 
@@ -48,9 +49,13 @@ class Config:
 
 
 def load(path: str | Path | None = None) -> Config:
-    chosen = Path(
-        path or os.environ.get("JARVIS_CONFIG") or DEFAULT_CONFIG
-    ).expanduser()
+    raw = str(path or os.environ.get("JARVIS_CONFIG") or DEFAULT_CONFIG)
+    if raw == "~":
+        chosen = HOST_HOME
+    elif raw.startswith("~/"):
+        chosen = HOST_HOME / raw[2:]
+    else:
+        chosen = Path(raw).expanduser()
     if chosen.exists():
         data = tomllib.loads(chosen.read_text())
     else:

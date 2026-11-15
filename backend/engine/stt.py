@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from .config import Config
+
+HOST_HOME = Path(os.environ.get("ORQELLA_HOST_HOME") or Path.home()).expanduser()
 
 
 class STTError(RuntimeError):
@@ -36,6 +39,10 @@ class Transcriber:
         device = str(self.config.get("stt.device", "cpu"))
         compute_type = str(self.config.get("stt.compute_type", "int8"))
         download_root = Path(str(self.config.get("stt.download_root", "models")))
+        if str(download_root) == "~":
+            download_root = HOST_HOME
+        elif str(download_root).startswith("~/"):
+            download_root = HOST_HOME / str(download_root)[2:]
         if not download_root.is_absolute():
             download_root = self.config.directory / download_root
         download_root.mkdir(parents=True, exist_ok=True)
@@ -43,7 +50,11 @@ class Transcriber:
         # A relative model name may be a local CTranslate2 directory (as
         # produced by ct2-transformers-converter) or a faster-whisper size
         # such as "small.en".
-        model_path = Path(model_name).expanduser()
+        model_path = Path(model_name)
+        if str(model_path) == "~":
+            model_path = HOST_HOME
+        elif str(model_path).startswith("~/"):
+            model_path = HOST_HOME / str(model_path)[2:]
         if not model_path.is_absolute():
             model_path = self.config.directory / model_path
         model_arg = str(model_path) if model_path.exists() else model_name

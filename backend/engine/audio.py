@@ -20,6 +20,32 @@ class AudioError(RuntimeError):
     pass
 
 
+def _process_cmdline(pid: int) -> str:
+    if not pid:
+        return ""
+    try:
+        if os.path.isdir("/proc"):
+            return Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        return (result.stdout or "").strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def _looks_like_recorder(pid: int) -> bool:
+    cmdline = _process_cmdline(pid).lower()
+    if not cmdline:
+        # On platforms without readable command lines, the PID is the best
+        # available identity after an explicit start.
+        return os.name == "nt"
+    return "record.py" in cmdline or "pw-record" in cmdline
+
+
 class Recording:
     """A toggle-style recording, usable from separate CLI invocations.
 
@@ -54,7 +80,7 @@ class Recording:
             pid = int(state.get("pid", 0))
         except (TypeError, ValueError):
             return False
-        return bool(pid and self._alive(pid))
+        return bool(pid and self._alive(pid) and _looks_like_recorder(pid))
 
     def start(self, max_seconds: int | None = None) -> Path:
         if self.active():
@@ -64,7 +90,11 @@ class Recording:
         source = str(self.config.get("audio.source", "") or "")
         limit = int(max_seconds or self.config.get("audio.max_seconds", 60))
 
-        self.state_dir.mkdir(parents=True, exist_ok=True)
+        self.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            self.state_dir.chmod(0o700)
+        except OSError:
+            pass
         self.path.unlink(missing_ok=True)
 
         stop_file = self.state_dir / "recording.stop"
@@ -125,6 +155,10 @@ class Recording:
                 }
             )
         )
+        try:
+            self.state_file.chmod(0o600)
+        except OSError:
+            pass
         return self.path
 
     def stop(self) -> Path | None:
@@ -135,13 +169,21 @@ class Recording:
             pid = 0
 
         cross_platform = os.name == "nt" or sys.platform == "darwin"
-        stop_file = Path(str(state.get("stop") or ""))
-        if cross_platform and stop_file.name:
+        raw_stop = Path(str(state.get("stop") or ""))
+        stop_file = raw_stop
+        if raw_stop.name:
+            try:
+                raw_stop.resolve().relative_to(self.state_dir.resolve())
+            except ValueError:
+                stop_file = None
+        else:
+            stop_file = None
+        if cross_platform and stop_file is not None:
             try:
                 stop_file.write_text("stop\n", encoding="utf-8")
             except OSError:
                 pass
-        if pid and self._alive(pid):
+        if pid and self._alive(pid) and _looks_like_recorder(pid):
             if not cross_platform:
                 try:
                     os.kill(pid, signal.SIGINT)
@@ -164,10 +206,15 @@ class Recording:
                 except OSError:
                     pass
                 time.sleep(0.1)
-        stop_file.unlink(missing_ok=True)
+        if stop_file is not None:
+            stop_file.unlink(missing_ok=True)
 
         self.state_file.unlink(missing_ok=True)
         path = Path(str(state.get("path") or self.path))
+        try:
+            path.resolve().relative_to(self.state_dir.resolve())
+        except ValueError:
+            return None
         if path.exists() and path.stat().st_size > 44:
             return path
         return None

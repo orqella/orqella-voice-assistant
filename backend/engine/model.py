@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from .config import Config, STATE_DIR
+
+HOST_HOME = Path(os.environ.get("ORQELLA_HOST_HOME") or Path.home()).expanduser()
 
 
 class ModelError(RuntimeError):
@@ -17,7 +20,7 @@ def lms_binary() -> str:
     found = shutil.which("lms")
     if found:
         return found
-    candidate = Path.home() / ".lmstudio" / "bin" / "lms"
+    candidate = HOST_HOME / ".lmstudio" / "bin" / "lms"
     if candidate.is_file():
         return str(candidate)
     raise ModelError(

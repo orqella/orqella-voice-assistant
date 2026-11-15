@@ -59,7 +59,16 @@ CLI recording may show a permission dialog), and grant Accessibility to the
 app or terminal for dictation paste.
 
 The agent prompt edits `data/config.toml`; it should not modify vendored engine
-source.
+source. `data/config.toml` is mode 0600 because it can hold `[api] token` and
+token commands. The sidecar synchronizes that token to the shared
+`voice-engine.token` file so the Home Assistant integration always uses the
+same value; the file is also 0600.
+
+Transcription uses a warm worker under `data/.venv`; the Whisper model is loaded
+once and reused. If the worker exits, the next request starts it again. Full
+OpenCode prompts are not written to `data/state/opencode.log` unless
+`opencode.log_prompts = true`. OpenCode directories are limited to the host
+home or `opencode.default_dir`.
 
 ## Security
 
@@ -68,3 +77,9 @@ the desktop session, audio devices, keyring, and local model files. It records
 only after the `media.record` permission is granted in the shell, and saved
 configuration is stored under the module data directory. Treat it as a trusted
 local application.
+
+`[api].host` defaults to `127.0.0.1`. Setting it to `0.0.0.0` exposes the Assist
+API beyond loopback; the bearer token is still required, but prefer a loopback
+bind or a firewall. The Home Assistant and LLM clients also send tokens over
+plain HTTP when their URLs use `http://`; use HTTPS for anything that is not
+loopback.
