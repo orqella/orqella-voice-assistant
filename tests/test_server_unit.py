@@ -25,10 +25,12 @@ class VoiceServerTests(unittest.TestCase):
         self.old_data = server.DATA
         self.old_config_file = server.CONFIG_FILE
         self.old_state_file = server.STATE_FILE
+        self.old_shared_token = server.SHARED_TOKEN_FILE
         server.DATA = self.root / "data"
         server.DATA.mkdir()
         server.CONFIG_FILE = server.DATA / "config.toml"
         server.STATE_FILE = server.DATA / "route_state.json"
+        server.SHARED_TOKEN_FILE = self.root / "engine.token"
         server.CONFIG_FILE.write_text(
             """
 [[mode]]
@@ -53,6 +55,7 @@ title = "Severance"
         server.DATA = self.old_data
         server.CONFIG_FILE = self.old_config_file
         server.STATE_FILE = self.old_state_file
+        server.SHARED_TOKEN_FILE = self.old_shared_token
         self.temp.cleanup()
 
     def test_display_text_and_route_keys_are_stable(self) -> None:
@@ -203,7 +206,10 @@ token = "secret"
         )
         self.assertEqual(server.api_settings(), ("0.0.0.0", 9999, "secret"))
         server.CONFIG_FILE.write_text("not = [valid", encoding="utf-8")
-        self.assertEqual(server.api_settings(), ("127.0.0.1", 8790, ""))
+        host, port, token = server.api_settings()
+        self.assertEqual((host, port), ("127.0.0.1", 8790))
+        self.assertTrue(token)
+        self.assertEqual(server.api_settings()[2], token)
 
     def test_write_config_is_atomic_and_keeps_a_backup(self) -> None:
         original = server.CONFIG_FILE.read_text(encoding="utf-8")

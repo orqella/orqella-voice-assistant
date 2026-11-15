@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hmac
 import os
 import tempfile
 import threading
@@ -9,6 +10,7 @@ from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from .actions import Executor
 from .cli import build_ha, log, resolve_result
@@ -64,8 +66,19 @@ class VoiceAssistantRequestHandler(BaseHTTPRequestHandler):
     def _authorized(self) -> bool:
         token = str(getattr(self.server, "token", "") or "")
         if not token:
+            return False
+        supplied = self.headers.get("Authorization", "")
+        return hmac.compare_digest(supplied, f"Bearer {token}")
+
+    def _origin_allowed(self) -> bool:
+        origin = self.headers.get("Origin", "").strip()
+        if not origin:
             return True
-        return self.headers.get("Authorization", "") == f"Bearer {token}"
+        try:
+            host = (urlparse(origin).hostname or "").lower()
+        except ValueError:
+            return False
+        return host in {"127.0.0.1", "localhost", "::1"}
 
     def _path(self) -> str:
         return self.path.split("?", 1)[0].rstrip("/") or "/"
@@ -99,6 +112,9 @@ class VoiceAssistantRequestHandler(BaseHTTPRequestHandler):
         if path not in {"/api/conversation", "/api/stt"}:
             self._send(404, {"error": "not found"})
             return
+        if not self._origin_allowed():
+            self._send(403, {"error": "origin is not allowed"})
+            return
         if not self._authorized():
             self._send(
                 401,
@@ -106,6 +122,11 @@ class VoiceAssistantRequestHandler(BaseHTTPRequestHandler):
                 headers={"WWW-Authenticate": "Bearer"},
             )
             return
+        if path == "/api/conversation":
+            content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+            if content_type != "application/json":
+                self._send(415, {"error": "application/json required"})
+                return
 
         if path == "/api/stt":
             self._handle_stt()
@@ -259,10 +280,9 @@ def serve(
     bind = str(host or config.get("api.host", "127.0.0.1"))
     listen_port = int(port or config.get("api.port", DEFAULT_PORT))
     token = str(config.get("api.token", "") or os.environ.get("JARVIS_API_TOKEN", ""))
-    if bind not in {"127.0.0.1", "localhost", "::1"} and not token:
+    if not token:
         raise SystemExit(
-            "jarvis api: refusing to bind a non-loopback address without "
-            "api.token or JARVIS_API_TOKEN"
+            "jarvis api: api.token or JARVIS_API_TOKEN is required"
         )
 
     server = VoiceAssistantHTTPServer((bind, listen_port), config, token=token)

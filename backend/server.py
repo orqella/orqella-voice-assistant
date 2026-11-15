@@ -6,10 +6,12 @@ the module's data directory so module code updates do not overwrite them.
 """
 import atexit
 import base64
+import hmac
 import json
 import os
 import platform
 import re
+import secrets
 import shutil
 import signal
 import subprocess
@@ -38,6 +40,15 @@ VENV = DATA / ".venv"
 VENV_PY = VENV / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 MODEL_MARKER = DATA / "model.ready"
 STATE_FILE = DATA / "route_state.json"
+# Shared with the Home Assistant module so its Jarvis integration can call the
+# engine without a second manual setup step. The file is mode 0600. In a real
+# daemon checkout the module root is `<data>/modules/<id>`; tests and portable
+# runs keep the token inside the module data directory.
+SHARED_TOKEN_FILE = (
+    MODULE_ROOT.parent.parent / "voice-engine.token"
+    if MODULE_ROOT.parent.name == "modules"
+    else DATA / "engine.token"
+)
 MAX_AUDIO = 30 * 1024 * 1024
 
 DATA.mkdir(parents=True, exist_ok=True)
@@ -93,18 +104,43 @@ def setup_ready():
     return PYTHON_SUPPORTED and VENV_PY.is_file() and MODEL_MARKER.is_file()
 
 
+def engine_token():
+    """Return the shared engine token, creating it once with 0600 mode."""
+    try:
+        value = SHARED_TOKEN_FILE.read_text(encoding="utf-8").strip()
+        if value:
+            return value
+    except OSError:
+        pass
+    value = secrets.token_urlsafe(32)
+    SHARED_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".voice-token-", dir=SHARED_TOKEN_FILE.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(value + "\n")
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, SHARED_TOKEN_FILE)
+    finally:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+    return value
+
+
 def api_settings():
     if tomllib is None:
-        return "127.0.0.1", 8790, ""
+        return "127.0.0.1", 8790, engine_token()
     try:
         data = tomllib.loads(CONFIG_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         data = {}
     api = data.get("api") if isinstance(data.get("api"), dict) else {}
+    token = str(api.get("token") or "").strip() or engine_token()
     return (
         str(api.get("host") or "127.0.0.1"),
         int(api.get("port") or 8790),
-        str(api.get("token") or ""),
+        token,
     )
 
 
@@ -219,6 +255,7 @@ def start_api():
     log = API_LOG.open("w", encoding="utf-8")
     env = os.environ.copy()
     env["JARVIS_CONFIG"] = str(CONFIG_FILE)
+    env["JARVIS_API_TOKEN"] = token
     env["VOICE_DATA_ROOT"] = str(DATA)
     env["PYTHONPATH"] = str(BACKEND)
     env["PYTHONUNBUFFERED"] = "1"
@@ -415,7 +452,14 @@ def load_disabled():
 
 
 def save_disabled(disabled):
-    STATE_FILE.write_text(json.dumps({"disabled": sorted(disabled)}, indent=2), encoding="utf-8")
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix="route_state-", suffix=".json", dir=STATE_FILE.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({"disabled": sorted(disabled)}, indent=2))
+        os.replace(temporary, STATE_FILE)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def route_key(group_id, item_name):
@@ -622,16 +666,25 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def authorized(self):
-        if self.headers.get("X-Orqella-Module-Token") == TOKEN:
+        supplied = self.headers.get("X-Orqella-Module-Token") or ""
+        if TOKEN and hmac.compare_digest(supplied, TOKEN):
             return True
         self.send_json(401, {"error": "unauthorized"})
         return False
 
     def read_json(self):
-        length = int(self.headers.get("Content-Length") or 0)
-        if length == 0:
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length <= 0:
             return {}
-        return json.loads(self.rfile.read(length) or b"{}")
+        if length > 48 * 1024 * 1024:
+            raise ValueError("request body too large")
+        value = json.loads(self.rfile.read(length) or b"{}")
+        if not isinstance(value, dict):
+            raise ValueError("JSON object required")
+        return value
 
     def do_GET(self):
         if not self.authorized():
