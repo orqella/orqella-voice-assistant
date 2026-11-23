@@ -1,5 +1,7 @@
 # Voice Assistant
 
+![The Voice Assistant overview card after a completed command](docs/screenshot.png)
+
 First-party external Orqella module for local hold-to-talk commands. The module
 runs on Linux, macOS, and Windows:
 
