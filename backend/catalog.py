@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -21,8 +22,6 @@ JARVIS_ROOT = BACKEND
 DATA_ROOT = Path(os.environ.get("VOICE_DATA_ROOT") or (Path(os.environ.get("ORQELLA_HOST_HOME") or Path.home()) / ".local/share/orqella/modules/voice-assistant/data")).expanduser()
 JARVIS_CONFIG_FILE = DATA_ROOT / "config.toml"
 JARVIS_ROUTER_FILE = BACKEND / "engine" / "router.py"
-JARVIS_LLM_FILE = BACKEND / "engine" / "llm.py"
-JARVIS_README_FILE = BACKEND.parent / "README.md"
 
 _JARVIS_CAP_CACHE: dict[str, Any] = {"at": 0.0, "data": None}
 _JARVIS_ROUTE_SCRIPT = r"""
@@ -64,29 +63,16 @@ if not entity:
 else:
     print(json.dumps(Router(config, ha=build_ha(config))._nanoleaf_effects(entity)))
 """
-_JARVIS_BATCH_SCRIPT = r"""
-import json
-import sys
-from engine.config import load
-from engine.router import Router
-
-phrases = json.loads(sys.stdin.read())
-router = Router(load())
-out = []
-for phrase in phrases:
-    result = router.route(str(phrase))
-    out.append({
-        "phrase": str(phrase),
-        "kind": result.kind,
-        "say": result.text,
-        "actions": len(result.actions),
-    })
-print(json.dumps(out))
-"""
-
-
 def _jarvis_norm(value: str) -> str:
     return " ".join(str(value or "").lower().split()).strip(" .?!")
+
+
+def _has_command(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple)):
+        return any(str(part).strip() for part in value)
+    return bool(value)
 
 
 def _jarvis_action_label(action: dict[str, Any]) -> str:
@@ -123,32 +109,6 @@ def _jarvis_ast_module(path: Path) -> ast.Module | None:
         return ast.parse(path.read_text(encoding="utf-8"))
     except (OSError, SyntaxError):
         return None
-
-
-def _jarvis_tools() -> list[dict[str, Any]]:
-    tree = _jarvis_ast_module(JARVIS_LLM_FILE)
-    if tree is None:
-        return []
-    for node in tree.body:
-        if isinstance(node, ast.Assign):
-            targets = node.targets
-            value_node = node.value
-        elif isinstance(node, ast.AnnAssign):
-            targets = [node.target]
-            value_node = node.value
-        else:
-            continue
-        if not any(isinstance(target, ast.Name) and target.id == "TOOLS" for target in targets):
-            continue
-        if value_node is None:
-            return []
-        try:
-            value = ast.literal_eval(value_node)
-        except (ValueError, SyntaxError):
-            return []
-        if isinstance(value, list):
-            return [item for item in value if isinstance(item, dict)]
-    return []
 
 
 def _jarvis_source_meta() -> dict[str, Any]:
@@ -273,69 +233,6 @@ def _jarvis_source_meta() -> dict[str, Any]:
     }
 
 
-def _jarvis_tested_phrases() -> list[str]:
-    path = JARVIS_ROOT / "tests" / "test_router.py"
-    tree = _jarvis_ast_module(path) if path.exists() else None
-    if tree is None:
-        return []
-    phrases: list[str] = []
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "route"
-            and node.args
-            and isinstance(node.args[0], ast.Constant)
-            and isinstance(node.args[0].value, str)
-        ):
-            if node.args[0].value not in phrases:
-                phrases.append(node.args[0].value)
-        if isinstance(node, ast.For) and isinstance(node.iter, (ast.Tuple, ast.List)):
-            values = [
-                element.value
-                for element in node.iter.elts
-                if isinstance(element, ast.Constant) and isinstance(element.value, str)
-            ]
-            if values and any(
-                isinstance(sub, ast.Call)
-                and isinstance(sub.func, ast.Attribute)
-                and sub.func.attr == "route"
-                for sub in ast.walk(node)
-            ):
-                for value in values:
-                    if value not in phrases:
-                        phrases.append(value)
-    return phrases
-
-
-def _jarvis_route_batch(phrases: list[str]) -> list[dict[str, Any]]:
-    if not phrases or not JARVIS_ROOT.is_dir():
-        return []
-    env = dict(os.environ)
-    current = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = str(JARVIS_ROOT) + (":" + current if current else "")
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-c", _JARVIS_BATCH_SCRIPT],
-            input=json.dumps(phrases),
-            text=True,
-            capture_output=True,
-            cwd=str(JARVIS_ROOT),
-            env=env,
-            timeout=15,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return []
-    for line in reversed((proc.stdout or "").strip().splitlines()):
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, list):
-            return [entry for entry in payload if isinstance(entry, dict)]
-    return []
-
-
 def _jarvis_nanoleaf_effects() -> list[str]:
     if not JARVIS_ROOT.is_dir():
         return []
@@ -363,23 +260,6 @@ def _jarvis_nanoleaf_effects() -> list[str]:
     return []
 
 
-def _jarvis_readme_examples() -> list[str]:
-    try:
-        text = JARVIS_README_FILE.read_text(encoding="utf-8")
-    except OSError:
-        return []
-    import re as _re
-    phrases = _re.findall(r'^\s*-\s+[“"]([^”"]+)[”"]', text, _re.MULTILINE)
-    out: list[str] = []
-    for phrase in phrases:
-        phrase = phrase.strip()
-        if phrase.lower().startswith("jarvis, "):
-            phrase = phrase[8:].strip()
-        if phrase and phrase not in out:
-            out.append(phrase)
-    return out
-
-
 def voice_capabilities(force: bool = False) -> dict[str, Any]:
     now = time.time()
     cached = _JARVIS_CAP_CACHE.get("data")
@@ -391,7 +271,6 @@ def voice_capabilities(force: bool = False) -> dict[str, Any]:
 
     config = _jarvis_load_config()
     source = _jarvis_source_meta()
-    tools = _jarvis_tools()
     nanoleaf_effects: list[str] = []
     lights_config = config.get("lights") or {}
     if isinstance(lights_config, dict) and lights_config.get("nanoleaf"):
@@ -486,6 +365,7 @@ def voice_capabilities(force: bool = False) -> dict[str, Any]:
                     delete={"type": "app", "key": str(app)},
                 )
                 for app, command in apps.items()
+                if _has_command(command)
             ],
             source_label="config apps",
         )
@@ -501,23 +381,23 @@ def voice_capabilities(force: bool = False) -> dict[str, Any]:
             light_items.extend([
                 item(
                     "Lights on / off",
-                    f"Turn all configured den lights on or off ({len(entities)} entities).",
+                    f"Turn all configured lights on or off ({len(entities)} entities).",
                     [
-                        "turn on the lights", "turn on the den lights", "lights on", "turn the lights on",
-                        "turn off the lights", "turn off the den lights", "lights off", "turn the lights off",
+                        "turn on the lights", "lights on", "turn the lights on",
+                        "turn off the lights", "lights off", "turn the lights off",
                         "kill the lights",
                     ],
                     ", ".join(str(entity) for entity in entities),
                 ),
                 item(
                     "Dim the lights",
-                    "Set every den light to 25% brightness.",
+                    "Set every configured light to 25% brightness.",
                     ["dim the lights"],
                     "light.turn_on · brightness_pct=25 · " + ", ".join(str(entity) for entity in entities),
                 ),
                 item(
                     "Set brightness",
-                    "Set every den light to a percentage.",
+                    "Set every configured light to a percentage.",
                     ["lights 50", "lights at 25 percent", "set the lights to 75%"],
                     "light.turn_on · brightness_pct=<requested> · " + ", ".join(str(entity) for entity in entities),
                 ),
@@ -526,7 +406,7 @@ def voice_capabilities(force: bool = False) -> dict[str, Any]:
             if colors:
                 light_items.append(item(
                     "Set a color",
-                    "Set every den light to a named color or hex value.",
+                    "Set every configured light to a named color or hex value.",
                     [f"set the lights to {color}" for color in colors],
                     "Named colors: " + ", ".join(colors),
                 ))
@@ -673,189 +553,91 @@ def voice_capabilities(force: bool = False) -> dict[str, Any]:
             source_label="config steamdeck",
         )
 
-    system_items: list[dict[str, Any]] = []
-    for entry in source.get("exacts") or []:
-        if entry.get("function") != "_match_builtin":
-            continue
-        phrases = [str(phrase) for phrase in entry.get("phrases") or []]
-        if not phrases:
-            continue
-        if any(_jarvis_norm(phrase) in seen for phrase in phrases):
-            continue
-        kind = str(entry.get("kind") or "say")
-        say = str(entry.get("say") or "").strip()
-        if kind == "status":
-            name = "System status"
-        elif kind == "cat_status":
-            name = "Cat status"
-        elif say:
-            name = say.rstrip(".")
-        elif any("time" in _jarvis_norm(phrase) for phrase in phrases):
-            name = "Time"
-        elif any("date" in _jarvis_norm(phrase) or "day" in _jarvis_norm(phrase) for phrase in phrases):
-            name = "Date"
-        else:
-            name = phrases[0]
-        description = {
-            "status": "Report GPU, CPU, memory and uptime.",
-            "cat_status": "Report the cat's weight and litter box visits.",
-        }.get(kind, f"Deterministic {kind} route.")
-        detail = f"kind: {kind}"
-        if name == "Locking the desktop":
-            detail = " ".join(str(part) for part in ((config.get("system") or {}).get("lock") or []))
-            description = "Lock the desktop."
-        elif name == "System status":
-            detail = "Reads CPU, GPU, memory and uptime."
-        elif name == "Time":
-            detail = "Speaks the current time."
-        elif name == "Date":
-            detail = "Speaks the current date."
-        system_items.append(item(name, description, phrases, detail))
-    system_items.append(item(
-        "Workspace",
-        "Switch to a Hyprland workspace.",
-        ["go to workspace 3", "workspace 3", "switch to workspace 5"],
-        "hyprctl dispatch workspace N",
-    ))
-    add_group(
-        "system",
-        "Desktop & system",
-        "🖥",
-        "Lock, status, time, date and workspace routes.",
-        system_items,
-        source_label="router _match_builtin",
-    )
+    input_config = config.get("input") or {}
+    if isinstance(input_config, dict) and input_config.get("builtin_routes", False):
+        system_items: list[dict[str, Any]] = []
+        for entry in source.get("exacts") or []:
+            if entry.get("function") != "_match_builtin":
+                continue
+            phrases = [str(phrase) for phrase in entry.get("phrases") or []]
+            if not phrases:
+                continue
+            if any(_jarvis_norm(phrase) in seen for phrase in phrases):
+                continue
+            kind = str(entry.get("kind") or "say")
+            if kind == "cat_status" and not (cat.get("weight") or cat.get("visits")):
+                continue
+            say = str(entry.get("say") or "").strip()
+            if kind == "status":
+                name = "System status"
+            elif kind == "cat_status":
+                name = "Cat status"
+            elif say:
+                name = say.rstrip(".")
+            elif any("time" in _jarvis_norm(phrase) for phrase in phrases):
+                name = "Time"
+            elif any("date" in _jarvis_norm(phrase) or "day" in _jarvis_norm(phrase) for phrase in phrases):
+                name = "Date"
+            else:
+                name = phrases[0]
+            description = {
+                "status": "Report GPU, CPU, memory and uptime.",
+                "cat_status": "Report the cat's weight and litter box visits.",
+            }.get(kind, f"Deterministic {kind} route.")
+            detail = f"kind: {kind}"
+            if name == "Locking the desktop":
+                detail = " ".join(str(part) for part in ((config.get("system") or {}).get("lock") or []))
+                description = "Lock the desktop."
+            elif name == "System status":
+                detail = "Reads CPU, GPU, memory and uptime."
+            elif name == "Time":
+                detail = "Speaks the current time."
+            elif name == "Date":
+                detail = "Speaks the current date."
+            system_items.append(item(name, description, phrases, detail))
+        if sys.platform.startswith("linux") and shutil.which("hyprctl"):
+            system_items.append(item(
+                "Workspace",
+                "Switch to a Hyprland workspace.",
+                ["go to workspace 3", "workspace 3", "switch to workspace 5"],
+                "hyprctl dispatch workspace N",
+            ))
+        add_group(
+            "system",
+            "Desktop & system",
+            "🖥",
+            "Lock, status, time, date and workspace routes.",
+            system_items,
+            source_label="router _match_builtin",
+        )
 
     opencode = config.get("opencode") or {}
-    add_group(
-        "opencode",
-        "OpenCode delegation",
-        "🤖",
-        "Hand coding work to OpenCode or check its jobs.",
-        [
-            item(
-                "Start a session",
-                "Ask OpenCode to do a coding task.",
-                [
-                    "ask opencode to add a test for the parser",
-                    "opencode fix the failing build",
-                    "delegate this to opencode: add a parser test",
-                ],
-                " · ".join(str(opencode.get(key)) for key in ("model", "default_dir") if opencode.get(key)),
-            ),
-            item(
-                "Check jobs",
-                "Report the status of OpenCode jobs started by Voice Assistant.",
-                ["what's opencode doing?", "opencode status", "show opencode status"],
-                "Reads Voice Assistant's OpenCode job state.",
-            ),
-        ],
-        source_label="config opencode + router",
-    )
-
-    detected: list[dict[str, Any]] = []
-    for entry in source.get("exacts") or []:
-        if entry.get("function") == "_match_builtin":
-            continue
-        phrases = [str(phrase) for phrase in entry.get("phrases") or []]
-        if not phrases or all(_jarvis_norm(phrase) in seen for phrase in phrases):
-            continue
-        detected.append(item(
-            str(entry.get("say") or phrases[0]).rstrip("."),
-            f"Exact route in router.{entry.get('function') or 'route'}.",
-            phrases,
-            f"kind: {entry.get('kind') or 'say'}",
-        ))
-        for phrase in phrases:
-            seen.add(_jarvis_norm(phrase))
-    add_group(
-        "detected",
-        "Other exact routes",
-        "⌁",
-        "Exact matches detected directly in router.py.",
-        detected,
-        source_label="router source",
-    )
-
-    tool_items: list[dict[str, Any]] = []
-    for tool in tools:
-        schema = tool.get("parameters") or {}
-        properties = schema.get("properties") or {}
-        required = set(schema.get("required") or [])
-        details = []
-        for name, prop in properties.items():
-            label = str(name)
-            if name in required:
-                label += "*"
-            enum = (prop or {}).get("enum") if isinstance(prop, dict) else None
-            if enum:
-                label += " (" + ", ".join(str(value) for value in enum) + ")"
-            details.append(label)
-        tool_items.append(item(
-            str(tool.get("name") or "tool"),
-            str(tool.get("description") or "Structured model tool."),
-            [],
-            ", ".join(details),
-            kind="tool",
-        ))
-    add_group(
-        "tools",
-        "Model fallback tools",
-        "🧰",
-        "Structured actions the local model can choose for free-form phrasing.",
-        tool_items,
-        source_label="jarvis.llm.TOOLS",
-    )
-
-    extra: list[dict[str, Any]] = []
-    for phrase in _jarvis_readme_examples():
-        if _jarvis_norm(phrase) in seen:
-            continue
-        seen.add(_jarvis_norm(phrase))
-        extra.append(item(phrase, "Documented example from the Voice Assistant README.", [phrase], kind="example"))
-    add_group(
-        "examples",
-        "Documented examples",
-        "📚",
-        "Commands listed in the Voice Assistant README that are not already covered above.",
-        extra,
-        source_label="README",
-    )
-
-    candidates = [
-        phrase for phrase in _jarvis_tested_phrases()
-        if _jarvis_norm(phrase) not in seen
-    ]
-    tested_items: list[dict[str, Any]] = []
-    for route in _jarvis_route_batch(candidates):
-        phrase = str(route.get("phrase") or "").strip()
-        kind = str(route.get("kind") or "")
-        say = str(route.get("say") or "").strip()
-        if not phrase or kind not in {"do", "status", "cat_status", "opencode_start", "opencode_status"}:
-            continue
-        if "job_abc123" in phrase or "~/Work/foo" in phrase:
-            continue
-        if any(marker in say for marker in (
-            "I don't have an action", "I don't know", "isn't reporting",
-            "already off", "found several",
-        )):
-            continue
-        tested_items.append(item(
-            phrase,
-            "Phrasing covered by Voice Assistant's routing tests.",
-            [phrase],
-            f"{kind}" + (f" · {say}" if say else ""),
-            kind="tested",
-        ))
-        seen.add(_jarvis_norm(phrase))
-    add_group(
-        "tested",
-        "Tested phrasings",
-        "🧪",
-        "Additional commands covered by Voice Assistant's routing tests.",
-        tested_items,
-        source_label="tests/test_router.py",
-    )
+    if isinstance(opencode, dict) and str(opencode.get("bridge") or "").strip():
+        add_group(
+            "opencode",
+            "OpenCode delegation",
+            "🤖",
+            "Hand coding work to OpenCode or check its jobs.",
+            [
+                item(
+                    "Start a session",
+                    "Ask OpenCode to do a coding task.",
+                    [
+                        "ask opencode to add a test for the parser",
+                        "opencode fix the failing build",
+                        "delegate this to opencode: add a parser test",
+                    ],
+                    " · ".join(str(opencode.get(key)) for key in ("model", "default_dir") if opencode.get(key)),
+                ),
+                item(
+                    "Check jobs",
+                    "Report the status of OpenCode jobs started by Voice Assistant.",
+                    ["what's opencode doing?", "opencode status", "show opencode status"],
+                    "Reads Voice Assistant's OpenCode job state.",
+                ),
+            ],
+            source_label="config opencode + router",
+        )
 
     result = {
         "generated": now,
@@ -866,7 +648,7 @@ def voice_capabilities(force: bool = False) -> dict[str, Any]:
             "enabled": bool((config.get("llm") or {}).get("enabled")),
             "model": str((config.get("llm") or {}).get("model") or ""),
         },
-        "tools": len(tools),
+        "tools": 0,
         "route_families": len(source.get("families") or []),
         "source_patterns": sum((source.get("patterns") or {}).values()),
         "phrase_count": sum(len(entry.get("phrases") or []) for group in groups for entry in group["items"]),

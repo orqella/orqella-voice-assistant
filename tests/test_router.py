@@ -66,3 +66,21 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(result.kind, "opencode_start")
         self.assertEqual(result.directory, "~/src")
         self.assertEqual(result.text, "fix the tests")
+
+    def test_builtin_routes_are_off_when_disabled(self) -> None:
+        config = Config(
+            {"input": {"builtin_routes": False}},
+            Path("/tmp/router-test.toml"),
+        )
+        result = Router(config).route("what time is it")
+        self.assertEqual(result.kind, "say")
+        self.assertIn("don't have an action", result.text)
+
+    def test_builtin_routes_are_available_when_enabled(self) -> None:
+        config = Config(
+            {"input": {"builtin_routes": True}},
+            Path("/tmp/router-test.toml"),
+        )
+        result = Router(config).route("what time is it")
+        self.assertEqual(result.kind, "say")
+        self.assertIn("It's", result.text)

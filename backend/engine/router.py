@@ -235,62 +235,65 @@ class Router:
         return Result("do", str(mode.get("say") or f"{name} mode."), actions)
 
     # -- deterministic commands -----------------------------------------
-    def _match_builtin(self, normalized: str) -> Result | None:
-        if normalized in {
-            "lock",
-            "lock the desktop",
-            "lock my screen",
-            "lock the computer",
-            "lock the pc",
-        }:
-            return Result(
-                "do",
-                "Locking the desktop.",
-                [Action(shell=list(self.config.get("system.lock", []) or default_lock_command()))],
-            )
-
-        if normalized in {
-            "status",
-            "system status",
-            "what's the gpu doing",
-            "whats the gpu doing",
-            "how's the system",
-            "hows the system",
-            "gpu status",
-        }:
-            return Result("status")
-
-        if normalized in {
-            "cat status",
-            "how's the cat",
-            "hows the cat",
-            "litter status",
-            "cat litter status",
-        }:
-            return Result("cat_status")
-
-        if normalized in {"what time is it", "what's the time", "whats the time", "time"}:
-            now = datetime.now().astimezone()
-            return Result("say", f"It's {now.strftime('%I:%M %p').lstrip('0')}.")
-
-        if normalized in {
-            "what's the date",
-            "whats the date",
-            "what day is it",
-            "date",
-        }:
-            now = datetime.now().astimezone()
-            return Result("say", f"It's {now.strftime('%A, %B')} {now.day}.")
-
-        match = re.search(r"(?:go to |switch to )?workspace (\d+)", normalized)
-        if match:
-            if not sys.platform.startswith("linux") or not shutil.which("hyprctl"):
+    def _match_builtin(self, normalized: str, *, generic: bool | None = None) -> Result | None:
+        if generic is None:
+            generic = bool(self.config.get("input.builtin_routes", False))
+        if generic:
+            if normalized in {
+                "lock",
+                "lock the desktop",
+                "lock my screen",
+                "lock the computer",
+                "lock the pc",
+            }:
                 return Result(
-                    "say",
-                    "Workspace switching is only available on a Hyprland desktop.",
+                    "do",
+                    "Locking the desktop.",
+                    [Action(shell=list(self.config.get("system.lock", []) or default_lock_command()))],
                 )
-            number = match.group(1)
-            return Result("do", f"Workspace {number}.", [Action(hypr=f"workspace {number}")])
+
+            if normalized in {
+                "status",
+                "system status",
+                "what's the gpu doing",
+                "whats the gpu doing",
+                "how's the system",
+                "hows the system",
+                "gpu status",
+            }:
+                return Result("status")
+
+            if normalized in {
+                "cat status",
+                "how's the cat",
+                "hows the cat",
+                "litter status",
+                "cat litter status",
+            }:
+                return Result("cat_status")
+
+            if normalized in {"what time is it", "what's the time", "whats the time", "time"}:
+                now = datetime.now().astimezone()
+                return Result("say", f"It's {now.strftime('%I:%M %p').lstrip('0')}.")
+
+            if normalized in {
+                "what's the date",
+                "whats the date",
+                "what day is it",
+                "date",
+            }:
+                now = datetime.now().astimezone()
+                return Result("say", f"It's {now.strftime('%A, %B')} {now.day}.")
+
+            match = re.search(r"(?:go to |switch to )?workspace (\d+)", normalized)
+            if match:
+                if not sys.platform.startswith("linux") or not shutil.which("hyprctl"):
+                    return Result(
+                        "say",
+                        "Workspace switching is only available on a Hyprland desktop.",
+                    )
+                number = match.group(1)
+                return Result("do", f"Workspace {number}.", [Action(hypr=f"workspace {number}")])
 
         match = re.match(r"(?:open|launch|start) (.+)$", normalized)
         if match:
@@ -991,7 +994,7 @@ class Router:
             return None
 
         if tool == "lock_desktop":
-            return self._match_builtin("lock the desktop")
+            return self._match_builtin("lock the desktop", generic=True)
 
         if tool == "system_status":
             return Result("status")
@@ -1000,16 +1003,16 @@ class Router:
             return Result("cat_status")
 
         if tool == "feed_cat":
-            return self._match_builtin("feed the cat")
+            return self._match_builtin("feed the cat", generic=True)
 
         if tool == "clean_litter":
-            return self._match_builtin("clean the litter box")
+            return self._match_builtin("clean the litter box", generic=True)
 
         if tool == "open_app":
-            return self._match_builtin(f"open {args.get('app', '')}")
+            return self._match_builtin(f"open {args.get('app', '')}", generic=True)
 
         if tool == "workspace":
-            return self._match_builtin(f"workspace {args.get('number', '')}")
+            return self._match_builtin(f"workspace {args.get('number', '')}", generic=True)
 
         if tool == "lights":
             action = str(args.get("action", ""))
@@ -1018,7 +1021,7 @@ class Router:
                 if not color:
                     return None
                 return self._lights(f"set the lights to {color}")
-            return self._match_builtin(f"lights {action}")
+            return self._match_builtin(f"lights {action}", generic=True)
 
         if tool == "nanoleaf_effect":
             effect = str(args.get("effect", "") or "").strip()
@@ -1028,7 +1031,7 @@ class Router:
 
         if tool == "media":
             action = str(args.get("action", "")).replace("_", " ")
-            return self._match_builtin(action)
+            return self._match_builtin(action, generic=True)
 
         if tool == "samsung_tv":
             action = str(args.get("action", "")).replace("-", "_")

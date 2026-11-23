@@ -18,6 +18,9 @@ vad = true
 [input]
 wake_words = ["voice assistant", "assistant"]
 default_mode = "command"
+# Built-in time/date/status/lock/workspace phrases. A fresh install ships with
+# no routes, so they stay off until this is set to true.
+builtin_routes = false
 
 [ha]
 url = "http://127.0.0.1:8123"
@@ -42,10 +45,8 @@ token = ""
 lock = []
 
 [apps]
-# Add commands for apps you want voice shortcuts to launch.
-terminal = []
-files = []
-browser = []
+# Add commands for apps you want voice shortcuts to launch, for example:
+# terminal = ["foot"]
 
 # Add house modes as [[mode]] tables with [mode.actions] entries.
 

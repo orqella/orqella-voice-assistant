@@ -8,6 +8,10 @@ backend, microphone bridge, and settings surfaces.
   warm transcription worker, route state, and the sidecar API.
 - `backend/engine/` is vendored engine code. Keep it independent of Orqella
   daemon internals.
+- Ship no default routes. `config.default.toml` has no apps, modes, or
+  integrations, and `input.builtin_routes = false` keeps generic engine phrases
+  off. The Settings catalog must stay driven by `data/config.toml`; do not
+  hardcode route groups or mine README/tests/engine source for entries.
 - `data/` is module-private (0700); `data/config.toml` and the shared token are
   0600. Never write runtime state into the checkout.
 - Use `ORQELLA_HOST_HOME` for host paths. `HOME` is the module home; `~` in

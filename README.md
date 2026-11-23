@@ -17,6 +17,12 @@ command are empty by default. The default config is intentionally generic:
 wake words are "voice assistant"/"assistant"; add only commands and services
 that exist on your machine.
 
+A fresh install starts with no routes. The engine's generic built-ins (time,
+date, status, lock, workspace) are off unless `input.builtin_routes = true` is
+set in `data/config.toml`; everything else appears only after you configure it.
+The Settings catalog is built from `data/config.toml`, so it stays empty until
+you add modes, apps, lights, media, or other integrations.
+
 - The overview card uses the trusted shell microphone bridge.
 - Settings contains the live route catalog, per-route/group toggles, expandable
   route details (phrases, action, source), the voice engine setup workflow, and
