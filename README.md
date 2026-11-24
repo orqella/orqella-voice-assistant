@@ -2,92 +2,76 @@
 
 ![The Voice Assistant overview card after a completed command](docs/screenshot.png)
 
-First-party external Orqella module for local hold-to-talk commands. The module
-runs on Linux, macOS, and Windows:
+Hold-to-talk voice commands that run locally. The assistant starts blank: you
+describe a capability to your agent, the agent adds a route for it, and from
+then on the assistant can do that thing. Speech-to-text, routing, and execution
+all happen on your machine; nothing is sent to a cloud service unless you
+configure an optional LLM or integration yourself.
 
-- **Linux:** PipeWire `pw-record`, Wayland typing/clipboard where available,
-  `notify-send`, and Hyprland workspace actions when `hyprctl` is present.
-- **macOS:** `sounddevice` recording in the managed Python environment,
-  `pbcopy` + Accessibility paste, `osascript` notifications, and `afplay` for
-  TTS files.
-- **Windows:** `sounddevice` recording, `clip` + SendKeys paste, PowerShell
-  notifications, and `Media.SoundPlayer` for TTS files.
+## Routes come from you
 
-Desktop-specific integrations degrade gracefully: Hyprland commands are only
-offered on Linux with `hyprctl`; app shortcuts and the Home Assistant token
-command are empty by default. The default config is intentionally generic:
-wake words are "voice assistant"/"assistant"; add only commands and services
-that exist on your machine.
+A fresh install has no routes. It records, transcribes, and tells you it has no
+action for what it heard.
 
-A fresh install starts with no routes. The engine's generic built-ins (time,
-date, status, lock, workspace) are off unless `input.builtin_routes = true` is
-set in `data/config.toml`; everything else appears only after you configure it.
-The Settings catalog is built from `data/config.toml`, so it stays empty until
-you add modes, apps, lights, media, or other integrations.
+Open **Settings → Modules → Voice Assistant**, describe the capability in plain
+language — "when I say *focus mode*, turn on the office lights and start a
+timer" or "open my notes app" — and ask the agent. The agent edits
+`data/config.toml`, and the new route appears in the Settings catalog right
+away. There is no engine change and no restart. You can review its phrases and
+action, disable it, or delete it from Settings.
 
-- The overview card uses the trusted shell microphone bridge.
-- Settings contains the live route catalog, per-route/group toggles, expandable
-  route details (phrases, action, source), the voice engine setup workflow, and
-  an agent prompt for adding routes. Config-defined modes, applications, and
-  Apple TV shows can be deleted from the Settings list; engine routes can be
-  disabled but not deleted from `config.toml`.
-- The module is overview-only; there is no standalone page tab.
-- When the module is disabled, its sidecar is stopped and its resources are not
-  used.
-- The module now owns the Home Assistant API process. When setup is complete it
-  starts `engine.cli serve` from `data/.venv` on the address configured in
-  `data/config.toml` (`api.host`, `api.port`, default `127.0.0.1:8790`).
-  Settings shows whether the API is managed by the module, an external process,
-  or stopped, with Start/Restart/Stop controls. The older standalone
-  `jarvis-api.service` is no longer required and should be disabled after the
-  module API is running.
-- Python 3.11+ is required by the sidecar because the engine uses `tomllib`.
-  Older interpreters now produce a clear setup error instead of a crash loop.
+Routes can call Home Assistant services, run shell commands, open apps, ask a
+local LLM, delegate to OpenCode, or group actions into modes. Everything is
+optional: use only what exists on your machine. Desktop-specific extras, such
+as workspace switching, appear only when the tools for them are present.
 
-## Engine data
+## Home Assistant Assist
 
-Runtime data lives under the installed module's `data/` directory:
+If you use Home Assistant, this module can power Assist. The Home Assistant
+module installs its Jarvis component and points an Assist conversation agent
+and Whisper STT pipeline at this engine, so an HA voice satellite — phone,
+ESPHome device, or speaker — can use the same routes you built here with local
+speech recognition.
 
-```text
-data/config.toml       # user routes, apps, modes, HA/LLM settings
-data/models/           # Whisper model cache
-data/.venv/            # faster-whisper runtime
-data/route_state.json  # disabled route keys
+The engine serves `POST /api/conversation` and `POST /api/stt` on
+`127.0.0.1:8790` by default, protected by a bearer token shared with the Home
+Assistant module. Settings → Modules → Voice Assistant has Start, Restart, and
+Stop controls for it; no separate system service is needed. If Home Assistant
+runs on another machine, point the Home Assistant module at this URL.
+
+## Setup
+
+```bash
+orqella module install https://github.com/orqella/orqella-voice-assistant
 ```
 
-The voice engine source is vendored under `backend/engine/`. There is no
-runtime dependency on an external voice project.
+- The overview card uses the trusted shell microphone bridge. Hold to talk.
+  The module is overview-only; there is no standalone page tab.
+- Python 3.11+ is required. The Settings setup button creates a managed virtual
+  environment, installs `sounddevice` and `psutil`, and downloads the Whisper
+  model (`small.en` by default; set `stt.model` in `data/config.toml` to change
+  it).
+- Linux records through PipeWire `pw-record`; macOS and Windows record through
+  `sounddevice`. macOS needs microphone access, plus Accessibility for typing
+  into the focused app. Linux typing uses `wtype` when present and falls back
+  to clipboard tools.
+- Notifications use the native tool for each platform: `notify-send`,
+  `osascript`, or PowerShell.
 
-The Settings tab can create the Python environment and download the configured
-Whisper model. The default config uses `small.en`; change `stt.model` in
-`data/config.toml` to use another model. Setup installs `sounddevice` and
-`psutil`; on Windows it also installs the Microsoft VC++ runtime DLLs that
-CTranslate2 needs. On macOS, grant microphone access when prompted (the first
-CLI recording may show a permission dialog), and grant Accessibility to the
-app or terminal for dictation paste.
+## Data and security
 
-The agent prompt edits `data/config.toml`; it should not modify vendored engine
-source. `data/config.toml` is mode 0600 because it can hold `[api] token` and
-token commands. The sidecar synchronizes that token to the shared
-`voice-engine.token` file so the Home Assistant integration always uses the
-same value; the file is also 0600.
-
-Transcription uses a warm worker under `data/.venv`; the Whisper model is loaded
-once and reused. If the worker exits, the next request starts it again. Full
-OpenCode prompts are not written to `data/state/opencode.log` unless
-`opencode.log_prompts = true`. OpenCode directories are limited to the host
-home or `opencode.default_dir`.
-
-## Security
+Runtime data lives under the installed module's `data/` directory:
+`config.toml`, `models/`, `.venv/`, and `route_state.json`. `data/config.toml`
+is mode 0600 because it can hold the API token and token commands. The shared
+`voice-engine.token` file is kept in sync and is also 0600.
 
 The sidecar is intentionally unsandboxed (`sandbox = false`) because it needs
 the desktop session, audio devices, keyring, and local model files. It records
-only after the `media.record` permission is granted in the shell, and saved
-configuration is stored under the module data directory. Treat it as a trusted
+only after the `media.record` permission is granted. Treat it as a trusted
 local application.
 
-`[api].host` defaults to `127.0.0.1`. Setting it to `0.0.0.0` exposes the Assist
-API beyond loopback; the bearer token is still required, but prefer a loopback
-bind or a firewall. The Home Assistant and LLM clients also send tokens over
+`[api].host` defaults to `127.0.0.1`. Setting it to `0.0.0.0` exposes the
+Assist API beyond this machine; the token is still required, but prefer a
+loopback bind or a firewall. Home Assistant and LLM clients send tokens over
 plain HTTP when their URLs use `http://`; use HTTPS for anything that is not
 loopback.

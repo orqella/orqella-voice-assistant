@@ -261,11 +261,11 @@ class LLM:
             (self.config.get("appletv.shows", {}) or {}).keys()
         )
         system = (
-            "You are Voice Assistant, a local voice assistant for a Hyprland desktop and "
-            "Home Assistant home. Choose exactly one tool when the request is an "
-            "action. If the request is a question or small talk, answer briefly "
-            "in 'say'. Return JSON only, with keys tool (string or null), args "
-            "(object), say (short sentence).\n"
+            "You are Voice Assistant, a local voice assistant on the user's desktop, "
+            "with optional Home Assistant integration. Choose exactly one tool when "
+            "the request is an action. If the request is a question or small talk, "
+            "answer briefly in 'say'. Return JSON only, with keys tool (string or "
+            "null), args (object), say (short sentence).\n"
             "If the user asks to ask, have, tell, or use OpenCode to do "
             "something, choose opencode_start with a complete standalone prompt; "
             "do not attempt the coding work yourself. Use opencode_status when "
