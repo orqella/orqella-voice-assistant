@@ -47,6 +47,10 @@ orqella module install https://github.com/orqella/orqella-voice-assistant
 
 - The overview card uses the trusted shell microphone bridge. Hold to talk.
   The module is overview-only; there is no standalone page tab.
+- On a phone, hold the button rather than selecting the card. The card
+  suppresses the browser's long-press text selection. iOS must reach the
+  dashboard through the Orqella app or a localhost/HTTPS origin, and the app
+  needs microphone access.
 - Python 3.11+ is required. The Settings setup button creates a managed virtual
   environment, installs `sounddevice` and `psutil`, and downloads the Whisper
   model (`small.en` by default; set `stt.model` in `data/config.toml` to change
